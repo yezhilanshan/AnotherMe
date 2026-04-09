@@ -1,0 +1,250 @@
+{
+  "mode": "2d",
+  "points": [
+    {
+      "id": "A",
+      "coord": [
+        -1.92282,
+        -1.11014
+      ]
+    },
+    {
+      "id": "B",
+      "coord": [
+        0.574651,
+        2.144627
+      ]
+    },
+    {
+      "id": "C",
+      "coord": [
+        2.18655,
+        -0.385548
+      ]
+    },
+    {
+      "id": "D",
+      "coord": [
+        0.574651,
+        -2.144627
+      ]
+    },
+    {
+      "id": "E",
+      "coord": [
+        5.49869,
+        3.012867
+      ]
+    },
+    {
+      "id": "O",
+      "coord": [
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "primitives": [
+    {
+      "id": "seg_AB",
+      "type": "segment",
+      "points": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_AC",
+      "type": "segment",
+      "points": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_BC",
+      "type": "segment",
+      "points": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_BE",
+      "type": "segment",
+      "points": [
+        "B",
+        "E"
+      ]
+    },
+    {
+      "id": "seg_CE",
+      "type": "segment",
+      "points": [
+        "C",
+        "E"
+      ]
+    },
+    {
+      "id": "seg_AD",
+      "type": "segment",
+      "points": [
+        "A",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_BD",
+      "type": "segment",
+      "points": [
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_CD",
+      "type": "segment",
+      "points": [
+        "C",
+        "D"
+      ]
+    },
+    {
+      "id": "poly_ABC",
+      "type": "polygon",
+      "points": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "poly_BCE",
+      "type": "polygon",
+      "points": [
+        "B",
+        "C",
+        "E"
+      ]
+    },
+    {
+      "id": "circle_O",
+      "type": "circle",
+      "center": "O",
+      "radius_point": "A"
+    },
+    {
+      "id": "arc_AB",
+      "type": "arc",
+      "points": [
+        "A",
+        "B"
+      ],
+      "center": "O"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "A",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "B",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "C",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "D",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "parallel",
+      "entities": [
+        "seg_AC",
+        "seg_BE"
+      ]
+    }
+  ],
+  "display": {
+    "points": {
+      "A": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "A"
+      },
+      "B": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "B"
+      },
+      "C": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "C"
+      },
+      "D": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "D"
+      },
+      "E": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "E"
+      },
+      "O": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "O"
+      }
+    },
+    "primitives": {}
+  },
+  "measurements": [
+    {
+      "type": "length",
+      "entities": [
+        "B",
+        "C"
+      ],
+      "value": 3
+    },
+    {
+      "type": "length",
+      "entities": [
+        "B",
+        "E"
+      ],
+      "value": 5
+    }
+  ],
+  "templates": [
+    "circle_parallel_extension",
+    "circle_basic",
+    "generic_triangle"
+  ],
+  "_solver_trace": [
+    "circle parallel-extension layout (A, C) // (B, E)"
+  ]
+}

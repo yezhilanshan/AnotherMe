@@ -1,0 +1,242 @@
+{
+  "mode": "2d",
+  "points": [
+    {
+      "id": "C",
+      "coord": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "B",
+      "coord": [
+        0.0,
+        6.0
+      ]
+    },
+    {
+      "id": "A",
+      "coord": [
+        8.0,
+        0.0
+      ]
+    },
+    {
+      "id": "D",
+      "coord": [
+        3.0,
+        0.0
+      ]
+    },
+    {
+      "id": "C1",
+      "coord": [
+        4.8,
+        2.4
+      ],
+      "derived": {
+        "type": "reflect_point",
+        "source": "C",
+        "axis": [
+          "B",
+          "D"
+        ]
+      }
+    }
+  ],
+  "primitives": [
+    {
+      "id": "seg_AB",
+      "type": "segment",
+      "points": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_BC",
+      "type": "segment",
+      "points": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_AC",
+      "type": "segment",
+      "points": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_BD",
+      "type": "segment",
+      "points": [
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_BC1",
+      "type": "segment",
+      "points": [
+        "B",
+        "C1"
+      ]
+    },
+    {
+      "id": "seg_DC1",
+      "type": "segment",
+      "points": [
+        "D",
+        "C1"
+      ]
+    },
+    {
+      "id": "poly_ABC",
+      "type": "polygon",
+      "points": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "poly_ADC1",
+      "type": "polygon",
+      "points": [
+        "A",
+        "D",
+        "C1"
+      ]
+    },
+    {
+      "id": "right_C",
+      "type": "right_angle",
+      "points": [
+        "A",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "id": "ang_C1",
+      "type": "angle",
+      "points": [
+        "D",
+        "C1",
+        "B"
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "type": "point_on_segment",
+      "entities": [
+        "D",
+        "seg_AC"
+      ]
+    },
+    {
+      "type": "perpendicular",
+      "entities": [
+        "seg_AC",
+        "seg_BC"
+      ]
+    },
+    {
+      "type": "collinear",
+      "entities": [
+        "A",
+        "D",
+        "C"
+      ]
+    },
+    {
+      "type": "equal_length",
+      "entities": [
+        "seg_BC",
+        "seg_BC1"
+      ]
+    }
+  ],
+  "display": {
+    "points": {
+      "A": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1
+      },
+      "B": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1
+      },
+      "C": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1
+      },
+      "D": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1
+      },
+      "C1": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1
+      }
+    },
+    "primitives": {
+      "poly_ADC1": {
+        "color": "Red",
+        "fill_opacity": 0.3
+      },
+      "poly_ABC": {
+        "color": "Orange",
+        "fill_opacity": 0.12
+      },
+      "seg_BD": {
+        "color": "Gray"
+      }
+    }
+  },
+  "measurements": [
+    {
+      "type": "length",
+      "entities": [
+        "B",
+        "C"
+      ],
+      "value": 6
+    },
+    {
+      "type": "length",
+      "entities": [
+        "A",
+        "C"
+      ],
+      "value": 8
+    },
+    {
+      "type": "length",
+      "entities": [
+        "C",
+        "D"
+      ],
+      "value": 3
+    },
+    {
+      "type": "angle",
+      "entities": [
+        "A",
+        "C",
+        "B"
+      ],
+      "value": 90
+    }
+  ]
+}

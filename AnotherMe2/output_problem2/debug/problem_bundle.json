@@ -1,0 +1,131 @@
+{
+  "problem_text": "13. (2021·广东深圳·统考中考真题) 如图, AB为⊙O的弦, D, C为⌢ACB的三等分点, AC∥BE.\n\n(1) 求证: ∠A = ∠E;\n\n(2) 若BC = 3, BE = 5, 求CE的长.",
+  "geometry_facts": {
+    "confidence": 0.98,
+    "ambiguities": [],
+    "roles": {},
+    "points": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "O"
+    ],
+    "segments": [
+      "AB",
+      "AC",
+      "BC",
+      "BE",
+      "CE",
+      "AD",
+      "BD",
+      "CD"
+    ],
+    "polygons": [
+      "ABC",
+      "BCE"
+    ],
+    "circles": [
+      {
+        "center": "O",
+        "points_on_circle": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ]
+      }
+    ],
+    "arcs": [
+      {
+        "center": "O",
+        "endpoints": [
+          "A",
+          "B"
+        ],
+        "intermediate_points": [
+          "D",
+          "C"
+        ]
+      }
+    ],
+    "angles": [
+      {
+        "vertex": "A",
+        "sides": [
+          "AB",
+          "AC"
+        ]
+      },
+      {
+        "vertex": "E",
+        "sides": [
+          "EB",
+          "EC"
+        ]
+      }
+    ],
+    "right_angles": [],
+    "relations": [
+      {
+        "type": "point_on_circle",
+        "point": "A",
+        "circle": "O"
+      },
+      {
+        "type": "point_on_circle",
+        "point": "B",
+        "circle": "O"
+      },
+      {
+        "type": "point_on_circle",
+        "point": "C",
+        "circle": "O"
+      },
+      {
+        "type": "point_on_circle",
+        "point": "D",
+        "circle": "O"
+      },
+      {
+        "type": "collinear",
+        "points": [
+          "A",
+          "D",
+          "C",
+          "B"
+        ]
+      },
+      {
+        "type": "point_on_segment",
+        "point": "D",
+        "segment": "ACB_arc"
+      },
+      {
+        "type": "point_on_segment",
+        "point": "C",
+        "segment": "ACB_arc"
+      },
+      {
+        "type": "parallel",
+        "lines": [
+          "AC",
+          "BE"
+        ]
+      }
+    ],
+    "measurements": [
+      {
+        "type": "length",
+        "segment": "BC",
+        "value": 3
+      },
+      {
+        "type": "length",
+        "segment": "BE",
+        "value": 5
+      }
+    ]
+  }
+}

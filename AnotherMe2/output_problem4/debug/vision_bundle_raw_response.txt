@@ -1,0 +1,28 @@
+{
+  "problem_text": "顺时针旋转△ABP 60°，连接 PQ，则△PBQ 是正三角形。可得△PQC 是直角三角形。所以∠APB=150°。",
+  "geometry_facts": {
+    "confidence": 0.8,
+    "ambiguities": [
+      "Point Q is not explicitly labeled in the diagram but inferred from text; its position relative to B, C, P is described only via rotation and resulting triangle properties.",
+      "The rotation center is not stated explicitly in text or diagram; context suggests it is point B (since △ABP rotates to involve Q and PBQ becomes equilateral), but this is an inference.",
+      "Dashed lines indicate construction (e.g., PQ, QC, BQ), but exact geometric roles (e.g., whether Q lies on BC or extension) are ambiguous without coordinates."
+    ],
+    "roles": {},
+    "points": ["A", "B", "C", "P", "Q"],
+    "segments": ["AB", "BP", "PA", "PQ", "QB", "QC", "BC"],
+    "polygons": ["△ABP", "△PBQ", "△PQC"],
+    "circles": [],
+    "arcs": [],
+    "angles": [{"vertex": "P", "sides": ["A", "B"], "name": "∠APB"}],
+    "right_angles": [{"vertex": "Q", "sides": ["P", "C"], "implied_by": "△PQC is right triangle"}],
+    "relations": [
+      {"type": "point_on_segment", "point": "Q", "segment": "BC"}],
+    "measurements": [
+      {"type": "angle", "value": 60, "unit": "deg", "description": "rotation angle of △ABP"},
+      {"type": "angle", "value": 60, "unit": "deg", "vertex": "B", "sides": ["P", "Q"], "description": "△PBQ equilateral ⇒ ∠PBQ = 60°"},
+      {"type": "angle", "value": 60, "unit": "deg", "vertex": "P", "sides": ["B", "Q"], "description": "△PBQ equilateral ⇒ ∠BPQ = 60°"},
+      {"type": "angle", "value": 90, "unit": "deg", "vertex": "Q", "sides": ["P", "C"], "description": "△PQC is right triangle"},
+      {"type": "angle", "value": 150, "unit": "deg", "vertex": "P", "sides": ["A", "B"], "name": "∠APB"}
+    ]
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "templates": [],
+  "confidence": 0.98,
+  "ambiguities": [],
+  "roles": {},
+  "points": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "P"
+  ],
+  "primitives": [
+    {
+      "id": "seg_AB",
+      "type": "segment",
+      "points": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_BC",
+      "type": "segment",
+      "points": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_CD",
+      "type": "segment",
+      "points": [
+        "C",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_DA",
+      "type": "segment",
+      "points": [
+        "D",
+        "A"
+      ]
+    },
+    {
+      "id": "seg_AP",
+      "type": "segment",
+      "points": [
+        "A",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_BP",
+      "type": "segment",
+      "points": [
+        "B",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_CP",
+      "type": "segment",
+      "points": [
+        "C",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_DP",
+      "type": "segment",
+      "points": [
+        "D",
+        "P"
+      ]
+    },
+    {
+      "id": "poly_ABCD",
+      "type": "polygon",
+      "points": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "type": "parallel",
+      "entities": [
+        "seg_AB",
+        "seg_CD"
+      ]
+    },
+    {
+      "type": "parallel",
+      "entities": [
+        "seg_DA",
+        "seg_BC"
+      ]
+    },
+    {
+      "type": "point_in_polygon",
+      "entities": [
+        "P",
+        "poly_ABCD"
+      ]
+    }
+  ],
+  "measurements": []
+}

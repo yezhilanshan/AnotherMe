@@ -1,0 +1,171 @@
+{
+  "templates": [
+    "circle_parallel_extension",
+    "circle_basic"
+  ],
+  "confidence": 0.98,
+  "ambiguities": [],
+  "roles": {},
+  "points": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "O"
+  ],
+  "primitives": [
+    {
+      "id": "seg_AB",
+      "type": "segment",
+      "points": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_AC",
+      "type": "segment",
+      "points": [
+        "A",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_BC",
+      "type": "segment",
+      "points": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_BE",
+      "type": "segment",
+      "points": [
+        "B",
+        "E"
+      ]
+    },
+    {
+      "id": "seg_CE",
+      "type": "segment",
+      "points": [
+        "C",
+        "E"
+      ]
+    },
+    {
+      "id": "seg_AD",
+      "type": "segment",
+      "points": [
+        "A",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_BD",
+      "type": "segment",
+      "points": [
+        "B",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_CD",
+      "type": "segment",
+      "points": [
+        "C",
+        "D"
+      ]
+    },
+    {
+      "id": "poly_ABC",
+      "type": "polygon",
+      "points": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "poly_BCE",
+      "type": "polygon",
+      "points": [
+        "B",
+        "C",
+        "E"
+      ]
+    },
+    {
+      "id": "circle_O",
+      "type": "circle",
+      "center": "O",
+      "radius_point": "A"
+    },
+    {
+      "id": "arc_AB",
+      "type": "arc",
+      "points": [
+        "A",
+        "B"
+      ],
+      "center": "O"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "A",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "B",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "C",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "point_on_circle",
+      "entities": [
+        "D",
+        "circle_O"
+      ]
+    },
+    {
+      "type": "parallel",
+      "entities": [
+        "seg_AC",
+        "seg_BE"
+      ]
+    }
+  ],
+  "measurements": [
+    {
+      "type": "length",
+      "entities": [
+        "B",
+        "C"
+      ],
+      "value": 3
+    },
+    {
+      "type": "length",
+      "entities": [
+        "B",
+        "E"
+      ],
+      "value": 5
+    }
+  ]
+}

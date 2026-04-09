@@ -1,0 +1,183 @@
+{
+  "mode": "2d",
+  "points": [
+    {
+      "id": "A",
+      "coord": [
+        2.5,
+        4.5
+      ]
+    },
+    {
+      "id": "B",
+      "coord": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "C",
+      "coord": [
+        8.0,
+        0.0
+      ]
+    },
+    {
+      "id": "D",
+      "coord": [
+        10.5,
+        4.5
+      ]
+    },
+    {
+      "id": "P",
+      "coord": [
+        4.48,
+        2.88
+      ]
+    }
+  ],
+  "primitives": [
+    {
+      "id": "seg_AB",
+      "type": "segment",
+      "points": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_BC",
+      "type": "segment",
+      "points": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_CD",
+      "type": "segment",
+      "points": [
+        "C",
+        "D"
+      ]
+    },
+    {
+      "id": "seg_DA",
+      "type": "segment",
+      "points": [
+        "D",
+        "A"
+      ]
+    },
+    {
+      "id": "seg_AP",
+      "type": "segment",
+      "points": [
+        "A",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_BP",
+      "type": "segment",
+      "points": [
+        "B",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_CP",
+      "type": "segment",
+      "points": [
+        "C",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_DP",
+      "type": "segment",
+      "points": [
+        "D",
+        "P"
+      ]
+    },
+    {
+      "id": "poly_ABCD",
+      "type": "polygon",
+      "points": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "type": "parallel",
+      "entities": [
+        "seg_AB",
+        "seg_CD"
+      ]
+    },
+    {
+      "type": "parallel",
+      "entities": [
+        "seg_DA",
+        "seg_BC"
+      ]
+    },
+    {
+      "type": "point_in_polygon",
+      "entities": [
+        "P",
+        "poly_ABCD"
+      ]
+    }
+  ],
+  "display": {
+    "points": {
+      "A": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "A"
+      },
+      "B": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "B"
+      },
+      "C": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "C"
+      },
+      "D": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "D"
+      },
+      "P": {
+        "show_label": true,
+        "fixed": true,
+        "label_mode": 1,
+        "label": "P"
+      }
+    },
+    "primitives": {}
+  },
+  "measurements": [],
+  "templates": [
+    "parallelogram",
+    "generic_quadrilateral"
+  ],
+  "_solver_trace": [
+    "parallelogram width=8.0, height=4.5, offset=2.5",
+    "resolved point_in_polygon P"
+  ]
+}

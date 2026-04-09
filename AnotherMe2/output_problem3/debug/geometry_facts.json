@@ -1,0 +1,99 @@
+{
+  "confidence": 0.98,
+  "ambiguities": [],
+  "roles": {},
+  "points": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "P"
+  ],
+  "segments": [
+    "AB",
+    "BC",
+    "CD",
+    "DA",
+    "AP",
+    "BP",
+    "CP",
+    "DP"
+  ],
+  "polygons": [
+    "ABCD"
+  ],
+  "circles": [],
+  "arcs": [],
+  "angles": [
+    {
+      "vertex": "B",
+      "sides": [
+        "PB",
+        "BA"
+      ],
+      "name": "∠PBA"
+    },
+    {
+      "vertex": "D",
+      "sides": [
+        "PD",
+        "DA"
+      ],
+      "name": "∠PDA"
+    },
+    {
+      "vertex": "A",
+      "sides": [
+        "PA",
+        "AB"
+      ],
+      "name": "∠PAB"
+    },
+    {
+      "vertex": "C",
+      "sides": [
+        "PC",
+        "CB"
+      ],
+      "name": "∠PCB"
+    }
+  ],
+  "right_angles": [],
+  "relations": [
+    {
+      "type": "collinear",
+      "items": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ]
+    },
+    {
+      "type": "parallel",
+      "items": [
+        "AB",
+        "CD"
+      ]
+    },
+    {
+      "type": "parallel",
+      "items": [
+        "AD",
+        "BC"
+      ]
+    },
+    {
+      "type": "point_on_segment",
+      "point": "P",
+      "segment": "interior_of_ABCD"
+    }
+  ],
+  "measurements": [
+    {
+      "type": "angle",
+      "value": "∠PBA",
+      "equals": "∠PDA"
+    }
+  ]
+}

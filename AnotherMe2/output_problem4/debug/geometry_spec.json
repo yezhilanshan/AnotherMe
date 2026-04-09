@@ -1,0 +1,227 @@
+{
+  "templates": [],
+  "confidence": 0.8,
+  "ambiguities": [
+    "Point Q is not explicitly labeled in the diagram but inferred from text; its position relative to B, C, P is described only via rotation and resulting triangle properties.",
+    "The rotation center is not stated explicitly in text or diagram; context suggests it is point B (since △ABP rotates to involve Q and PBQ becomes equilateral), but this is an inference.",
+    "Dashed lines indicate construction (e.g., PQ, QC, BQ), but exact geometric roles (e.g., whether Q lies on BC or extension) are ambiguous without coordinates."
+  ],
+  "roles": {},
+  "points": [
+    "A",
+    "B",
+    "C",
+    "P",
+    "Q"
+  ],
+  "primitives": [
+    {
+      "id": "seg_AB",
+      "type": "segment",
+      "points": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_BP",
+      "type": "segment",
+      "points": [
+        "B",
+        "P"
+      ]
+    },
+    {
+      "id": "seg_PA",
+      "type": "segment",
+      "points": [
+        "P",
+        "A"
+      ]
+    },
+    {
+      "id": "seg_PQ",
+      "type": "segment",
+      "points": [
+        "P",
+        "Q"
+      ]
+    },
+    {
+      "id": "seg_QB",
+      "type": "segment",
+      "points": [
+        "Q",
+        "B"
+      ]
+    },
+    {
+      "id": "seg_QC",
+      "type": "segment",
+      "points": [
+        "Q",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_BC",
+      "type": "segment",
+      "points": [
+        "B",
+        "C"
+      ]
+    },
+    {
+      "id": "poly_ABP",
+      "type": "polygon",
+      "points": [
+        "A",
+        "B",
+        "P"
+      ]
+    },
+    {
+      "id": "poly_PBQ",
+      "type": "polygon",
+      "points": [
+        "P",
+        "B",
+        "Q"
+      ]
+    },
+    {
+      "id": "poly_PQC",
+      "type": "polygon",
+      "points": [
+        "P",
+        "Q",
+        "C"
+      ]
+    },
+    {
+      "id": "ang_PQC",
+      "type": "right_angle",
+      "points": [
+        "P",
+        "Q",
+        "C"
+      ]
+    },
+    {
+      "id": "seg_CP",
+      "type": "segment",
+      "points": [
+        "C",
+        "P"
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "type": "point_on_segment",
+      "entities": [
+        "Q",
+        "seg_BC"
+      ]
+    },
+    {
+      "type": "equal_length",
+      "entities": [
+        "seg_BP",
+        "seg_QB"
+      ]
+    },
+    {
+      "type": "equal_length",
+      "entities": [
+        "seg_QB",
+        "seg_PQ"
+      ]
+    }
+  ],
+  "measurements": [
+    {
+      "type": "angle",
+      "entities": [
+        "P",
+        "B",
+        "Q"
+      ],
+      "value": 60
+    },
+    {
+      "type": "angle",
+      "entities": [
+        "B",
+        "P",
+        "Q"
+      ],
+      "value": 60
+    },
+    {
+      "type": "angle",
+      "entities": [
+        "P",
+        "Q",
+        "C"
+      ],
+      "value": 90
+    },
+    {
+      "type": "angle",
+      "entities": [
+        "A",
+        "P",
+        "B"
+      ],
+      "value": 150
+    }
+  ],
+  "display": {
+    "points": {},
+    "primitives": {
+      "seg_AB": {
+        "style": "solid",
+        "role": "interior_link"
+      },
+      "seg_BP": {
+        "style": "solid",
+        "role": "interior_link"
+      },
+      "seg_PA": {
+        "style": "solid",
+        "role": "interior_link"
+      },
+      "seg_PQ": {
+        "style": "dashed",
+        "role": "construction"
+      },
+      "seg_QB": {
+        "style": "dashed",
+        "role": "construction"
+      },
+      "seg_QC": {
+        "style": "dashed",
+        "role": "construction"
+      },
+      "seg_BC": {
+        "style": "solid",
+        "role": "interior_link"
+      },
+      "poly_ABP": {
+        "role": "polygon"
+      },
+      "poly_PBQ": {
+        "role": "polygon"
+      },
+      "poly_PQC": {
+        "role": "polygon"
+      },
+      "ang_PQC": {},
+      "seg_CP": {
+        "style": "solid",
+        "role": "interior_link"
+      }
+    }
+  }
+}

@@ -1,0 +1,418 @@
+{
+  "is_valid": false,
+  "failed_checks": [
+    {
+      "type": "equal_length",
+      "entities": [
+        "seg_BP",
+        "seg_QB"
+      ],
+      "message": "segment lengths differ"
+    },
+    {
+      "type": "equal_length",
+      "entities": [
+        "seg_QB",
+        "seg_PQ"
+      ],
+      "message": "segment lengths differ"
+    },
+    {
+      "type": "measurement:angle",
+      "entities": [
+        "P",
+        "B",
+        "Q"
+      ],
+      "expected": 60,
+      "actual": 77.295976
+    },
+    {
+      "type": "measurement:angle",
+      "entities": [
+        "B",
+        "P",
+        "Q"
+      ],
+      "expected": 60,
+      "actual": 61.315043
+    },
+    {
+      "type": "measurement:angle",
+      "entities": [
+        "P",
+        "Q",
+        "C"
+      ],
+      "expected": 90,
+      "actual": 54.772337
+    },
+    {
+      "type": "measurement:angle",
+      "entities": [
+        "A",
+        "P",
+        "B"
+      ],
+      "expected": 150,
+      "actual": 118.684959
+    }
+  ],
+  "missing_entities": [],
+  "unsupported_relations": [],
+  "solver_trace": [
+    "generic triangle fell back to canonical layout",
+    "resolved point_in_polygon P",
+    "resolved point_outside_polygon Q"
+  ],
+  "resolved_scene": {
+    "mode": "2d",
+    "points": [
+      {
+        "id": "A",
+        "coord": [
+          2.8,
+          5.6
+        ]
+      },
+      {
+        "id": "B",
+        "coord": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "id": "C",
+        "coord": [
+          8.0,
+          0.0
+        ]
+      },
+      {
+        "id": "P",
+        "coord": [
+          3.376,
+          2.912
+        ]
+      },
+      {
+        "id": "Q",
+        "coord": [
+          4.754305,
+          -3.520089
+        ]
+      }
+    ],
+    "primitives": [
+      {
+        "id": "seg_AB",
+        "type": "segment",
+        "points": [
+          "A",
+          "B"
+        ]
+      },
+      {
+        "id": "seg_BP",
+        "type": "segment",
+        "points": [
+          "B",
+          "P"
+        ]
+      },
+      {
+        "id": "seg_PA",
+        "type": "segment",
+        "points": [
+          "P",
+          "A"
+        ]
+      },
+      {
+        "id": "seg_PQ",
+        "type": "segment",
+        "points": [
+          "P",
+          "Q"
+        ]
+      },
+      {
+        "id": "seg_QB",
+        "type": "segment",
+        "points": [
+          "Q",
+          "B"
+        ]
+      },
+      {
+        "id": "seg_QC",
+        "type": "segment",
+        "points": [
+          "Q",
+          "C"
+        ]
+      },
+      {
+        "id": "seg_BC",
+        "type": "segment",
+        "points": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "id": "poly_ABP",
+        "type": "polygon",
+        "points": [
+          "A",
+          "B",
+          "P"
+        ]
+      },
+      {
+        "id": "poly_PBQ",
+        "type": "polygon",
+        "points": [
+          "P",
+          "B",
+          "Q"
+        ]
+      },
+      {
+        "id": "poly_PQC",
+        "type": "polygon",
+        "points": [
+          "P",
+          "Q",
+          "C"
+        ]
+      },
+      {
+        "id": "ang_PQC",
+        "type": "right_angle",
+        "points": [
+          "P",
+          "Q",
+          "C"
+        ]
+      },
+      {
+        "id": "seg_CP",
+        "type": "segment",
+        "points": [
+          "C",
+          "P"
+        ]
+      },
+      {
+        "id": "poly_ABC",
+        "type": "polygon",
+        "points": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      {
+        "id": "seg_AC",
+        "type": "segment",
+        "points": [
+          "A",
+          "C"
+        ]
+      },
+      {
+        "id": "ang_PBQ",
+        "type": "angle",
+        "points": [
+          "P",
+          "B",
+          "Q"
+        ],
+        "value": 60.0
+      },
+      {
+        "id": "ang_BPQ",
+        "type": "angle",
+        "points": [
+          "B",
+          "P",
+          "Q"
+        ],
+        "value": 60.0
+      },
+      {
+        "id": "ang_APB",
+        "type": "angle",
+        "points": [
+          "A",
+          "P",
+          "B"
+        ],
+        "value": 150.0
+      }
+    ],
+    "constraints": [
+      {
+        "type": "equal_length",
+        "entities": [
+          "seg_BP",
+          "seg_QB"
+        ]
+      },
+      {
+        "type": "equal_length",
+        "entities": [
+          "seg_QB",
+          "seg_PQ"
+        ]
+      },
+      {
+        "type": "point_in_polygon",
+        "entities": [
+          "P",
+          "poly_ABC"
+        ]
+      },
+      {
+        "type": "point_outside_polygon",
+        "entities": [
+          "Q",
+          "poly_ABC"
+        ]
+      }
+    ],
+    "display": {
+      "points": {
+        "A": {
+          "show_label": true,
+          "fixed": true,
+          "label_mode": 1,
+          "label": "A"
+        },
+        "B": {
+          "show_label": true,
+          "fixed": true,
+          "label_mode": 1,
+          "label": "B"
+        },
+        "C": {
+          "show_label": true,
+          "fixed": true,
+          "label_mode": 1,
+          "label": "C"
+        },
+        "P": {
+          "show_label": true,
+          "fixed": true,
+          "label_mode": 1,
+          "label": "P"
+        },
+        "Q": {
+          "show_label": true,
+          "fixed": true,
+          "label_mode": 1,
+          "label": "Q"
+        }
+      },
+      "primitives": {
+        "seg_AB": {
+          "style": "solid",
+          "role": "primary_edge"
+        },
+        "seg_BP": {
+          "style": "solid",
+          "role": "interior_link"
+        },
+        "seg_PA": {
+          "style": "solid",
+          "role": "interior_link"
+        },
+        "seg_PQ": {
+          "style": "dashed",
+          "role": "construction"
+        },
+        "seg_QB": {
+          "style": "dashed",
+          "role": "construction"
+        },
+        "seg_QC": {
+          "style": "dashed",
+          "role": "construction"
+        },
+        "seg_BC": {
+          "style": "solid",
+          "role": "primary_edge"
+        },
+        "poly_ABP": {
+          "role": "polygon"
+        },
+        "poly_PBQ": {
+          "role": "polygon"
+        },
+        "poly_PQC": {
+          "role": "polygon"
+        },
+        "ang_PQC": {},
+        "seg_CP": {
+          "style": "solid",
+          "role": "interior_link"
+        },
+        "poly_ABC": {
+          "role": "polygon"
+        },
+        "seg_AC": {
+          "style": "solid",
+          "role": "primary_edge"
+        }
+      }
+    },
+    "measurements": [
+      {
+        "type": "angle",
+        "entities": [
+          "P",
+          "B",
+          "Q"
+        ],
+        "value": 60
+      },
+      {
+        "type": "angle",
+        "entities": [
+          "B",
+          "P",
+          "Q"
+        ],
+        "value": 60
+      },
+      {
+        "type": "angle",
+        "entities": [
+          "P",
+          "Q",
+          "C"
+        ],
+        "value": 90
+      },
+      {
+        "type": "angle",
+        "entities": [
+          "A",
+          "P",
+          "B"
+        ],
+        "value": 150
+      }
+    ],
+    "templates": [
+      "generic_triangle"
+    ],
+    "_solver_trace": [
+      "generic triangle fell back to canonical layout",
+      "resolved point_in_polygon P",
+      "resolved point_outside_polygon Q"
+    ]
+  }
+}
