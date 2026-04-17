@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Check, Copy, RotateCcw } from 'lucide-react';
+import { BookOpen, Check, Copy, Bookmark, BookmarkCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { Textarea } from '@/components/ui/textarea';
+import ReactMarkdown from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
 import type { Scene } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
 import type {
@@ -14,8 +16,9 @@ import type {
   PPTTableElement,
   PPTTextElement,
 } from '@/lib/types/slides';
+import { removeKnowledgeCardNote, upsertKnowledgeCardNote } from '@/lib/notebook/storage';
 
-const STORAGE_PREFIX = 'anotherme:classroom:editable-notes:v1';
+const STORAGE_PREFIX = 'anotherme:classroom:saved-knowledge-cards:v1';
 
 interface LectureNotesViewProps {
   scenes: Scene[];
@@ -29,10 +32,12 @@ interface KnowledgeSection {
   bullets: string[];
 }
 
-interface SavedNote {
-  content: string;
-  sourceHash: string;
-  updatedAt: number;
+interface SavedKnowledgeCards {
+  [sceneId: string]: {
+    saved: boolean;
+    savedAt: number;
+    noteId?: string;
+  };
 }
 
 function stripHtml(value: string): string {
@@ -231,39 +236,54 @@ function buildKnowledgeSections(scenes: Scene[]): KnowledgeSection[] {
     .filter((section) => section.bullets.length > 0);
 }
 
-function buildInitialNote(sections: KnowledgeSection[]): string {
-  if (!sections.length) return '';
-
-  const lines = ['本次课堂知识点', ''];
-  sections.forEach((section, index) => {
-    lines.push(`${index + 1}. ${section.title}`);
-    section.bullets.forEach((bullet) => lines.push(`- ${bullet}`));
-    lines.push('');
-  });
-  return lines.join('\n').trim();
+function readSavedCardsFromStorage(storageKey: string | null): SavedKnowledgeCards {
+  if (!storageKey || typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as SavedKnowledgeCards;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNotesViewProps) {
   const { t } = useI18n();
-  const [content, setContent] = useState('');
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [copied, setCopied] = useState(false);
-  const referenceRef = useRef<HTMLDivElement>(null);
-
-  const knowledgeSections = useMemo(() => buildKnowledgeSections(scenes), [scenes]);
-  const initialNote = useMemo(() => buildInitialNote(knowledgeSections), [knowledgeSections]);
+  const [copiedSceneId, setCopiedSceneId] = useState<string | null>(null);
   const storageKey = useMemo(
     () => (stageId ? `${STORAGE_PREFIX}:${stageId}` : null),
     [stageId],
   );
-  const sourceHash = useMemo(
-    () =>
-      knowledgeSections
-        .map((section) => `${section.sceneId}:${section.title}:${section.bullets.join('|')}`)
-        .join('||'),
-    [knowledgeSections],
+  const [savedCards, setSavedCards] = useState<SavedKnowledgeCards>(() =>
+    readSavedCardsFromStorage(storageKey),
   );
+  const referenceRef = useRef<HTMLDivElement>(null);
 
+  const knowledgeSections = useMemo(() => buildKnowledgeSections(scenes), [scenes]);
+
+  // Load saved cards from localStorage
+  useEffect(() => {
+    if (!storageKey) return;
+    const timer = window.setTimeout(() => {
+      setSavedCards(readSavedCardsFromStorage(storageKey));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [storageKey]);
+
+  // Save cards to localStorage
+  useEffect(() => {
+    if (!storageKey) return;
+
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(savedCards));
+    } catch {
+      // Ignore save errors
+    }
+  }, [savedCards, storageKey]);
+
+  // Scroll to current scene
   useEffect(() => {
     if (!currentSceneId || !referenceRef.current) return;
     const el = referenceRef.current.querySelector(`[data-scene-id="${currentSceneId}"]`);
@@ -272,62 +292,83 @@ export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNot
     }
   }, [currentSceneId]);
 
-  useEffect(() => {
-    const nextContent = (() => {
-      if (!storageKey) {
-        return initialNote;
-      }
+  // Toggle save state for a card
+  const toggleSave = (sceneId: string) => {
+    const target = knowledgeSections.find((section) => section.sceneId === sceneId);
+    if (!target) return;
 
-      try {
-        const raw = localStorage.getItem(storageKey);
-        if (!raw) {
-          return initialNote;
-        }
+    const stageKey = stageId || 'unknown-stage';
+    const wasSaved = Boolean(savedCards[sceneId]?.saved);
 
-        const parsed = JSON.parse(raw) as SavedNote;
-        return parsed.sourceHash === sourceHash ? parsed.content : initialNote;
-      } catch {
-        return initialNote;
-      }
-    })();
-
-    const timer = window.setTimeout(() => {
-      setContent(nextContent);
-      setSaveState('saved');
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [initialNote, sourceHash, storageKey]);
-
-  useEffect(() => {
-    if (!storageKey) {
+    if (wasSaved) {
+      removeKnowledgeCardNote(stageKey, sceneId);
+      setSavedCards((prev) => ({
+        ...prev,
+        [sceneId]: {
+          ...prev[sceneId],
+          saved: false,
+          savedAt: Date.now(),
+        },
+      }));
       return;
     }
 
-    if (saveState !== 'saving') return;
+    const note = upsertKnowledgeCardNote({
+      stageId: stageKey,
+      sceneId,
+      title: target.title,
+      bullets: target.bullets,
+    });
 
-    const timer = window.setTimeout(() => {
-      const payload: SavedNote = {
-        content,
-        sourceHash,
-        updatedAt: Date.now(),
-      };
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(payload));
-        setSaveState('saved');
-      } catch {
-        setSaveState('idle');
-      }
-    }, 200);
+    setSavedCards((prev) => ({
+      ...prev,
+      [sceneId]: {
+        saved: true,
+        savedAt: Date.now(),
+        noteId: note.id,
+      },
+    }));
+  };
 
-    return () => window.clearTimeout(timer);
-  }, [content, saveState, sourceHash, storageKey]);
+  const handleCopyCard = async (section: KnowledgeSection) => {
+    const text = [`${section.title}`, ...section.bullets.map((bullet) => `- ${bullet}`)].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSceneId(section.sceneId);
+    } catch {
+      setCopiedSceneId(null);
+    }
+  };
+
+  // Copy all knowledge
+  const handleCopyAll = async () => {
+    const text = knowledgeSections
+      .map((section, index) => {
+        const lines = [`${index + 1}. ${section.title}`];
+        section.bullets.forEach((bullet) => lines.push(`- ${bullet}`));
+        return lines.join('\n');
+      })
+      .join('\n\n');
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1200);
     return () => window.clearTimeout(timer);
   }, [copied]);
+
+  useEffect(() => {
+    if (!copiedSceneId) return;
+    const timer = window.setTimeout(() => setCopiedSceneId(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copiedSceneId]);
 
   if (knowledgeSections.length === 0) {
     return (
@@ -351,85 +392,44 @@ export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNot
         <div className="flex items-center justify-between gap-2">
           <div>
             <p className="text-[11px] font-semibold text-purple-700 dark:text-purple-300">
-              {t('chat.lectureNotes.editorTitle')}
+              课堂知识点
             </p>
             <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
-              {saveState === 'saving'
-                ? t('chat.lectureNotes.saving')
-                : t('chat.lectureNotes.saved')}
+              共 {knowledgeSections.length} 个知识点，收藏后会同步到笔记本
             </p>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => {
-                setContent(initialNote);
-                setSaveState('saving');
-              }}
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              {t('chat.lectureNotes.restore')}
-            </button>
-            <button
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(content);
-                  setCopied(true);
-                } catch {
-                  setCopied(false);
-                }
-              }}
-              className="inline-flex h-8 items-center gap-1 rounded-lg bg-purple-600 px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-400"
-            >
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              {copied ? t('chat.lectureNotes.copied') : t('chat.lectureNotes.copy')}
-            </button>
-          </div>
+          <button
+            onClick={handleCopyAll}
+            className="inline-flex h-8 items-center gap-1 rounded-lg bg-purple-600 px-2.5 text-[11px] font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-400"
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied ? '已复制' : '复制全部'}
+          </button>
         </div>
-      </div>
-
-      <div className="mb-3 rounded-xl border border-gray-200/80 bg-white/80 p-2.5 dark:border-gray-800 dark:bg-gray-900/60">
-        <Textarea
-          value={content}
-          onChange={(event) => {
-            setContent(event.target.value);
-            setSaveState('saving');
-          }}
-          placeholder={t('chat.lectureNotes.editorPlaceholder')}
-          className="min-h-[260px] resize-none border-0 bg-transparent p-1 text-[12px] leading-6 shadow-none focus-visible:ring-0"
-        />
       </div>
 
       <div
         ref={referenceRef}
-        className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-3 py-2 dark:border-gray-800 dark:bg-gray-900/40"
+        className="space-y-2"
       >
-        <div className="mb-2">
-          <p className="text-[11px] font-semibold text-gray-700 dark:text-gray-200">
-            {t('chat.lectureNotes.referenceTitle')}
-          </p>
-          <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
-            {t('chat.lectureNotes.referenceHint')}
-          </p>
-        </div>
+        {knowledgeSections.map((section, index) => {
+          const isCurrent = section.sceneId === currentSceneId;
+          const isSaved = savedCards[section.sceneId]?.saved;
 
-        <div className="space-y-2">
-          {knowledgeSections.map((section, index) => {
-            const isCurrent = section.sceneId === currentSceneId;
-
-            return (
-              <div
-                key={section.sceneId}
-                data-scene-id={section.sceneId}
-                className={cn(
-                  'rounded-lg px-3 py-2 transition-colors duration-200',
-                  isCurrent
-                    ? 'bg-purple-50/80 ring-1 ring-purple-200/60 dark:bg-purple-950/25 dark:ring-purple-700/30'
-                    : 'bg-white/80 dark:bg-gray-800/30',
-                )}
-              >
-                <div className="flex items-center gap-2 mb-1.5">
+          return (
+            <div
+              key={section.sceneId}
+              data-scene-id={section.sceneId}
+              className={cn(
+                'rounded-xl border border-gray-200/80 bg-white/80 px-4 py-3 transition-all duration-200 dark:border-gray-800 dark:bg-gray-900/60',
+                isCurrent
+                  ? 'ring-2 ring-purple-300 dark:ring-purple-700'
+                  : 'hover:border-purple-200/80 hover:bg-purple-50/40 dark:hover:border-purple-700/40 dark:hover:bg-purple-950/20',
+              )}
+            >
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2">
                   <div
                     className={cn(
                       'w-2 h-2 rounded-full shrink-0',
@@ -439,33 +439,73 @@ export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNot
                     )}
                   />
                   <span className="text-[10px] font-semibold tracking-wide text-gray-400 dark:text-gray-500">
-                    {t('chat.lectureNotes.pageLabel', { n: index + 1 })}
+                    PPT {index + 1}
                   </span>
                   {isCurrent && (
                     <span className="text-[9px] font-bold px-1.5 py-px rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300">
-                      {t('chat.lectureNotes.currentPage')}
+                      当前页
                     </span>
                   )}
                 </div>
 
-                <h4 className="text-[13px] font-bold text-gray-800 dark:text-gray-100 mb-1.5 pl-4">
-                  {section.title}
-                </h4>
-
-                <div className="pl-4 space-y-1">
-                  {section.bullets.map((bullet) => (
-                    <p
-                      key={`${section.sceneId}-${bullet}`}
-                      className="text-[12px] leading-[1.8] text-gray-700 dark:text-gray-300"
-                    >
-                      • {bullet}
-                    </p>
-                  ))}
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => handleCopyCard(section)}
+                    className={cn(
+                      'rounded-lg p-1.5 transition-colors',
+                      copiedSceneId === section.sceneId
+                        ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300'
+                        : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-800',
+                    )}
+                    title={copiedSceneId === section.sceneId ? '已复制' : '复制卡片内容'}
+                  >
+                    {copiedSceneId === section.sceneId ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => toggleSave(section.sceneId)}
+                    className={cn(
+                      'rounded-lg p-1.5 transition-colors',
+                      isSaved
+                        ? 'bg-purple-50 text-purple-600 hover:bg-purple-100 dark:bg-purple-900/30 dark:text-purple-400 dark:hover:bg-purple-900/50'
+                        : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-800',
+                    )}
+                    title={isSaved ? '取消收藏' : '收藏到笔记本'}
+                  >
+                    {isSaved ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
+                  </button>
                 </div>
               </div>
-            );
-          })}
-        </div>
+
+              <h4 className="text-[13px] font-bold text-gray-800 dark:text-gray-100 mb-2 pl-4">
+                {section.title}
+              </h4>
+
+              <div className="pl-4 space-y-1.5">
+                {section.bullets.map((bullet) => (
+                  <div
+                    key={`${section.sceneId}-${bullet}`}
+                    className="text-[12px] leading-[1.8] text-gray-700 dark:text-gray-300"
+                  >
+                    <span className="mr-1">•</span>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                      components={{
+                        p: ({ children }) => <span>{children}</span>,
+                      }}
+                    >
+                      {bullet}
+                    </ReactMarkdown>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

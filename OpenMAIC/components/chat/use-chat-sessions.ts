@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ChatSessions');
+const DEFAULT_PERSISTENCE_SOURCE = '课堂互动';
 
 interface UseChatSessionsOptions {
   onLiveSpeech?: (text: string | null, agentId?: string | null) => void;
@@ -97,6 +98,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingSessionIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<ChatSession[]>(sessions);
+  const aiSessionIdByChatSessionRef = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
@@ -122,6 +124,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         s.status === 'active' ? { ...s, status: 'interrupted' as SessionStatus } : s,
       ),
     );
+    aiSessionIdByChatSessionRef.current.clear();
     setActiveSessionId(null);
     setExpandedSessionIds(new Set());
   }, [stageId]);
@@ -147,12 +150,62 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       }
       buffers.forEach((buf) => buf.shutdown());
       buffers.clear();
+      aiSessionIdByChatSessionRef.current.clear();
     };
   }, []);
 
   // Session-scoped "paused intent" — survives buffer recreation across turns.
   // When true, newly created discussion/QA buffers are immediately paused.
   const livePausedRef = useRef(false);
+
+  const buildPersistencePayload = useCallback(
+    (params: {
+      chatSessionId: string;
+      sessionType: SessionType;
+      title?: string;
+      latestUserMessageId?: string;
+    }) => ({
+      enabled: true,
+      sessionId: aiSessionIdByChatSessionRef.current.get(params.chatSessionId),
+      title:
+        params.title?.trim() || (params.sessionType === 'discussion' ? '课堂讨论' : '课堂问答'),
+      source: DEFAULT_PERSISTENCE_SOURCE,
+      latestUserMessageId: params.latestUserMessageId,
+    }),
+    [],
+  );
+
+  const enqueueLearningExtract = useCallback(
+    async (aiSessionId: string, reason: 'max_turns'): Promise<void> => {
+      const requestExtract = async (): Promise<void> => {
+        const response = await fetch(`/api/ai/sessions/${encodeURIComponent(aiSessionId)}/extract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ extractVersion: 'v1', reason }),
+        });
+
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '');
+          throw new Error(`extract enqueue failed: ${response.status} ${detail}`.trim());
+        }
+      };
+
+      try {
+        await requestExtract();
+      } catch (error) {
+        log.warn(
+          `[AgentLoop] Extract enqueue failed for ${aiSessionId}, retrying once:`,
+          error,
+        );
+        try {
+          await requestExtract();
+        } catch (retryError) {
+          log.error(`[AgentLoop] Extract enqueue retry failed for ${aiSessionId}:`, retryError);
+        }
+      }
+    },
+    [],
+  );
 
   const clearLiveSessionAfterError = useCallback((sessionId: string, message: string) => {
     const now = Date.now();
@@ -454,6 +507,17 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         model?: string;
         providerType?: string;
         requiresApiKey?: boolean;
+        persistence?: {
+          enabled: boolean;
+          userId?: string;
+          sessionId?: string;
+          title?: string;
+          source?: string;
+          subject?: string;
+          linkedClassroomId?: string;
+          linkedConversationId?: string;
+          latestUserMessageId?: string;
+        };
       },
       controller: AbortController,
       sessionType: SessionType,
@@ -498,6 +562,18 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
         };
 
+        const persistencePayload = requestTemplate.persistence
+          ? {
+              ...requestTemplate.persistence,
+              sessionId:
+                aiSessionIdByChatSessionRef.current.get(sessionId) ||
+                requestTemplate.persistence.sessionId,
+            }
+          : undefined;
+        if (persistencePayload) {
+          requestTemplate.persistence = persistencePayload;
+        }
+
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -506,6 +582,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             messages: currentMessages,
             storeState: freshStoreState,
             directorState,
+            persistence: persistencePayload,
           }),
           signal: controller.signal,
         });
@@ -513,6 +590,19 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(`API error: ${response.status} - ${errorText}`);
+        }
+
+        const aiSessionId = response.headers.get('x-ai-session-id')?.trim();
+        if (aiSessionId) {
+          aiSessionIdByChatSessionRef.current.set(sessionId, aiSessionId);
+          if (requestTemplate.persistence) {
+            requestTemplate.persistence.sessionId = aiSessionId;
+          }
+        }
+
+        // A single user message should only be persisted once per agent loop.
+        if (requestTemplate.persistence?.latestUserMessageId) {
+          requestTemplate.persistence.latestUserMessageId = undefined;
         }
 
         const buffer = createBufferForSession(sessionId, sessionType);
@@ -593,13 +683,27 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           );
           onStopSessionRef.current?.();
         }
-        // If maxTurns reached, log it
-        if (turnCount >= maxTurns && doneData && doneData.totalAgents > 0) {
+        // If maxTurns reached, log it and enqueue extract once (fallback for non-END paths).
+        if (
+          turnCount >= maxTurns &&
+          doneData &&
+          doneData.totalAgents > 0 &&
+          !doneData.cueUserReceived
+        ) {
           log.info(`[AgentLoop] Max turns (${maxTurns}) reached for session ${sessionId}`);
+
+          const aiSessionId = aiSessionIdByChatSessionRef.current.get(sessionId);
+          if (aiSessionId) {
+            void enqueueLearningExtract(aiSessionId, 'max_turns');
+          } else {
+            log.warn(
+              `[AgentLoop] Max turns reached but missing AI session id for chat session ${sessionId}`,
+            );
+          }
         }
       }
     },
-    [createBufferForSession],
+    [createBufferForSession, enqueueLearningExtract],
   );
 
   /**
@@ -664,6 +768,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         buf.shutdown();
         buffersRef.current.delete(sessionId);
       }
+      aiSessionIdByChatSessionRef.current.delete(sessionId);
       lectureMessageIds.current.delete(sessionId);
       lectureLastActionIndexRef.current.delete(sessionId);
 
@@ -876,6 +981,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             model: mc.modelString,
             providerType: mc.providerType,
             requiresApiKey: mc.requiresApiKey,
+            persistence: buildPersistencePayload({
+              chatSessionId: sessionId,
+              sessionType: session.type,
+              title: session.title,
+            }),
           },
           controller,
           session.type,
@@ -898,7 +1008,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         }
       }
     },
-    [clearLiveSessionAfterError, runAgentLoop],
+    [buildPersistencePayload, clearLiveSessionAfterError, runAgentLoop],
   );
 
   /**
@@ -1063,6 +1173,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
         const userProfileState = useUserProfileStore.getState();
         const mc = getCurrentModelConfig();
+        const persistenceTitle =
+          existingSession?.title || (sessionType === 'discussion' ? '课堂讨论' : '课堂问答');
 
         await runAgentLoop(
           sessionId!,
@@ -1088,6 +1200,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             model: mc.modelString,
             providerType: mc.providerType,
             requiresApiKey: mc.requiresApiKey,
+            persistence: buildPersistencePayload({
+              chatSessionId: sessionId!,
+              sessionType,
+              title: persistenceTitle,
+              latestUserMessageId: userMessageId,
+            }),
           },
           controller,
           sessionType,
@@ -1115,6 +1233,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     },
     [
       activeSessionId,
+      buildPersistencePayload,
       clearLiveSessionAfterError,
       isStreaming,
       createSession,
@@ -1231,6 +1350,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             model: mc.modelString,
             providerType: mc.providerType,
             requiresApiKey: mc.requiresApiKey,
+            persistence: buildPersistencePayload({
+              chatSessionId: sessionId,
+              sessionType: 'discussion',
+              title: request.topic,
+            }),
           },
           controller,
           'discussion',
@@ -1257,7 +1381,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- t is stable from i18n context
-    [clearLiveSessionAfterError, endSession, runAgentLoop],
+    [buildPersistencePayload, clearLiveSessionAfterError, endSession, runAgentLoop],
   );
 
   /**

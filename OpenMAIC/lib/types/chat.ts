@@ -285,13 +285,14 @@ export interface StatelessChatRequest {
   requiresApiKey?: boolean;
   persistence?: {
     enabled: boolean;
-    userId: string;
+    userId?: string;
     sessionId?: string;
     title?: string;
     source?: string;
     subject?: string;
     linkedClassroomId?: string;
     linkedConversationId?: string;
+    latestUserMessageId?: string;
   };
 }
 

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import {
   createLearningRecordExtractJob,
   isAnotherMe2GatewayError,
+  listGatewayAISessions,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveRequestUserId } from '@/lib/auth/request-user';
@@ -24,6 +25,15 @@ export async function POST(
       extractVersion?: string;
     };
     const userId = await resolveRequestUserId(request, body.userId);
+
+    const ownedSessions = await listGatewayAISessions({
+      userId,
+      limit: 1000,
+    });
+    const ownsSession = ownedSessions.some((session) => session.session_id === sessionId);
+    if (!ownsSession) {
+      return apiError('INVALID_REQUEST', 403, 'Session is not accessible');
+    }
 
     const job = await createLearningRecordExtractJob({
       sessionId,

@@ -20,13 +20,89 @@ import { apiError } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
 import { resolveModel } from '@/lib/server/resolve-model';
 import {
+  createLearningRecordExtractJob,
   createGatewayAIMessage,
   createGatewayAISession,
+  listGatewayAISessions,
 } from '@/lib/server/anotherme2-gateway';
+import { getAuthenticatedUserFromRequest } from '@/lib/auth/session';
 const log = createLogger('Chat API');
 
 // Allow streaming responses up to 60 seconds
 export const maxDuration = 60;
+
+const SESSION_OWNERSHIP_CACHE_TTL_MS = 5 * 60 * 1000;
+const SESSION_OWNERSHIP_CACHE_MAX_SIZE = 5000;
+const verifiedSessionOwnershipCache = new Map<string, number>();
+
+function buildOwnershipCacheKey(userId: string, sessionId: string): string {
+  return `${userId}:${sessionId}`;
+}
+
+function hasValidCachedOwnership(userId: string, sessionId: string): boolean {
+  const key = buildOwnershipCacheKey(userId, sessionId);
+  const expiry = verifiedSessionOwnershipCache.get(key);
+  if (!expiry) return false;
+  if (expiry <= Date.now()) {
+    verifiedSessionOwnershipCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function cacheSessionOwnership(userId: string, sessionId: string): void {
+  if (verifiedSessionOwnershipCache.size >= SESSION_OWNERSHIP_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    for (const [key, expiry] of verifiedSessionOwnershipCache) {
+      if (expiry <= now) {
+        verifiedSessionOwnershipCache.delete(key);
+      }
+    }
+
+    while (verifiedSessionOwnershipCache.size >= SESSION_OWNERSHIP_CACHE_MAX_SIZE) {
+      const oldestKey = verifiedSessionOwnershipCache.keys().next().value;
+      if (!oldestKey) break;
+      verifiedSessionOwnershipCache.delete(oldestKey);
+    }
+  }
+
+  verifiedSessionOwnershipCache.set(
+    buildOwnershipCacheKey(userId, sessionId),
+    Date.now() + SESSION_OWNERSHIP_CACHE_TTL_MS,
+  );
+}
+
+async function resolveOwnedPersistenceSessionId(params: {
+  userId: string;
+  requestedSessionId?: string;
+}): Promise<string | undefined> {
+  const requested = params.requestedSessionId?.trim();
+  if (!requested) return undefined;
+
+  if (hasValidCachedOwnership(params.userId, requested)) {
+    return requested;
+  }
+
+  try {
+    const sessions = await listGatewayAISessions({
+      userId: params.userId,
+      limit: 200,
+    });
+    const owned = sessions.some((session) => session.session_id === requested);
+    if (!owned) {
+      log.warn(
+        `Ignoring unowned AI session id from client: ${requested} for user ${params.userId}`,
+      );
+      return undefined;
+    }
+
+    cacheSessionOwnership(params.userId, requested);
+    return requested;
+  } catch (error) {
+    log.warn('Failed to verify AI session ownership, falling back to create new session:', error);
+    return undefined;
+  }
+}
 
 function extractTextFromMessage(message: unknown): string {
   if (!message || typeof message !== 'object') return '';
@@ -126,12 +202,26 @@ export async function POST(req: NextRequest) {
     );
 
     let persistenceSessionId: string | undefined;
-    const persistenceUserId = body.persistence?.enabled ? body.persistence.userId?.trim() : '';
+    let persistenceUserId = '';
+    if (body.persistence?.enabled) {
+      try {
+        const authUser = await getAuthenticatedUserFromRequest(req);
+        persistenceUserId = authUser?.id?.trim() || '';
+      } catch (error) {
+        log.warn('Failed to resolve authenticated user for persistence, skip persistence:', error);
+      }
+    }
     const latestUserMessage = extractLatestUserMessage(body.messages);
+    const shouldPersistLatestUserMessage =
+      !!latestUserMessage &&
+      body.persistence?.latestUserMessageId === latestUserMessage.messageId;
 
     if (body.persistence?.enabled && persistenceUserId) {
       try {
-        persistenceSessionId = body.persistence.sessionId;
+        persistenceSessionId = await resolveOwnedPersistenceSessionId({
+          userId: persistenceUserId,
+          requestedSessionId: body.persistence.sessionId,
+        });
         if (!persistenceSessionId) {
           const created = await createGatewayAISession({
             userId: persistenceUserId,
@@ -144,7 +234,7 @@ export async function POST(req: NextRequest) {
           persistenceSessionId = created.session_id;
         }
 
-        if (latestUserMessage) {
+        if (shouldPersistLatestUserMessage) {
           await createGatewayAIMessage({
             sessionId: persistenceSessionId,
             role: 'user',
@@ -157,6 +247,8 @@ export async function POST(req: NextRequest) {
       } catch (error) {
         log.warn('Chat persistence setup failed, continue without persistence:', error);
       }
+    } else if (body.persistence?.enabled) {
+      log.warn('Persistence requested without authenticated user, skip persistence for this request');
     }
 
     // Use the native request signal for abort propagation
@@ -194,6 +286,8 @@ export async function POST(req: NextRequest) {
 
         let assistantText = '';
         let wasAborted = false;
+        let cueUserReceived = false;
+        let doneTotalAgents = 0;
 
         const generator = statelessGenerate(
           {
@@ -218,11 +312,19 @@ export async function POST(req: NextRequest) {
               assistantText += delta;
             }
           }
+          if (event.type === 'cue_user') {
+            cueUserReceived = true;
+          }
+          if (event.type === 'done') {
+            const totalAgents = event.data?.totalAgents;
+            doneTotalAgents = typeof totalAgents === 'number' ? totalAgents : 0;
+          }
 
           const data = `data: ${JSON.stringify(event)}\n\n`;
           await writer.write(encoder.encode(data));
         }
 
+        let assistantPersisted = false;
         if (!wasAborted && persistenceSessionId && assistantText.trim()) {
           try {
             await createGatewayAIMessage({
@@ -234,9 +336,25 @@ export async function POST(req: NextRequest) {
               modelName: body.model,
               requestId: `chat-assistant-${persistenceSessionId}-${latestUserMessage?.messageId || 'none'}-turn-${body.directorState?.turnCount ?? 0}`,
             });
+            assistantPersisted = true;
           } catch (error) {
             log.warn('Failed to persist assistant response after stream:', error);
           }
+        }
+
+        const shouldTriggerExtract =
+          !wasAborted &&
+          (cueUserReceived || doneTotalAgents === 0) &&
+          (assistantPersisted || !assistantText.trim());
+
+        if (shouldTriggerExtract && persistenceSessionId) {
+          // Fire-and-forget: extraction failure should not affect chat response.
+          void createLearningRecordExtractJob({
+            sessionId: persistenceSessionId,
+            userId: persistenceUserId || undefined,
+          }).catch((error) => {
+            log.warn('Failed to enqueue learning record extract job:', error);
+          });
         }
 
         stopHeartbeat();
@@ -265,7 +383,7 @@ export async function POST(req: NextRequest) {
           const errorEvent: StatelessEvent = {
             type: 'error',
             data: {
-              message: error instanceof Error ? error.message : String(error),
+              message: '聊天生成失败，请稍后重试。',
             },
           };
           await writer.write(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
@@ -289,10 +407,6 @@ export async function POST(req: NextRequest) {
       `Chat request failed [model=${chatModel ?? 'unknown'}, messages=${chatMessageCount ?? 0}]:`,
       error,
     );
-    return apiError(
-      'INTERNAL_ERROR',
-      500,
-      error instanceof Error ? error.message : 'Failed to process request',
-    );
+    return apiError('INTERNAL_ERROR', 500, 'Failed to process request');
   }
 }

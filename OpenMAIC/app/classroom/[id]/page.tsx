@@ -12,6 +12,7 @@ import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
+import { REQUIRED_CLASSROOM_AGENT_IDS } from '@/lib/orchestration/registry/classroom-presets';
 
 const log = createLogger('Classroom');
 
@@ -93,7 +94,7 @@ export default function ClassroomDetailPage() {
         useSettingsStore
           .getState()
           .setSelectedAgentIds(
-            cleanIds && cleanIds.length > 0 ? cleanIds : ['default-1', 'default-2', 'default-3'],
+            cleanIds && cleanIds.length > 0 ? cleanIds : [...REQUIRED_CLASSROOM_AGENT_IDS],
           );
       }
     } catch (error) {

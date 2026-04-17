@@ -18,9 +18,11 @@ import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
 import { WEB_SEARCH_PROVIDERS } from '@/lib/web-search/constants';
 import type { WebSearchProviderId } from '@/lib/web-search/types';
 import { createLogger } from '@/lib/logger';
+import { REQUIRED_CLASSROOM_AGENT_IDS } from '@/lib/orchestration/registry/classroom-presets';
 import { validateProvider, validateModel } from '@/lib/store/settings-validation';
 
 const log = createLogger('Settings');
+const DEFAULT_SELECTED_AGENT_IDS: string[] = [...REQUIRED_CLASSROOM_AGENT_IDS];
 
 /** Available playback speed tiers */
 export const PLAYBACK_SPEEDS = [1, 1.25, 1.5, 2] as const;
@@ -501,7 +503,7 @@ const migrateFromOldStorage = () => {
   let ttsModel = 'openai-tts';
   if (oldTtsModel) ttsModel = oldTtsModel;
 
-  let selectedAgentIds = ['default-1', 'default-2', 'default-3'];
+  let selectedAgentIds = [...DEFAULT_SELECTED_AGENT_IDS];
   if (oldSelectedAgents) {
     try {
       const parsed = JSON.parse(oldSelectedAgents);
@@ -543,7 +545,7 @@ export const useSettingsStore = create<SettingsState>()(
         modelId: migratedData?.modelId || '',
         providersConfig: migratedData?.providersConfig || getDefaultProvidersConfig(),
         ttsModel: migratedData?.ttsModel || 'openai-tts',
-        selectedAgentIds: migratedData?.selectedAgentIds || ['default-1', 'default-2', 'default-3'],
+        selectedAgentIds: migratedData?.selectedAgentIds || [...DEFAULT_SELECTED_AGENT_IDS],
         maxTurns: migratedData?.maxTurns?.toString() || '10',
         agentMode: 'auto' as const,
         autoAgentCount: 3,

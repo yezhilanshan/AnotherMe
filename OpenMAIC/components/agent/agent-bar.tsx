@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
+import { REQUIRED_CLASSROOM_AGENT_IDS } from '@/lib/orchestration/registry/classroom-presets';
 import { resolveAgentVoice, getAvailableProvidersWithVoices } from '@/lib/audio/voice-resolver';
 import { playBrowserTTSPreview } from '@/lib/audio/browser-tts-preview';
 import {
@@ -536,6 +537,17 @@ export function AgentBar() {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  useEffect(() => {
+    if (agentMode !== 'preset') return;
+    const requiredPresetIds = REQUIRED_CLASSROOM_AGENT_IDS.filter((id) =>
+      agents.some((agent) => agent.id === id && !agent.isGenerated),
+    );
+    const missing = requiredPresetIds.filter((id) => !selectedAgentIds.includes(id));
+    if (missing.length > 0) {
+      setSelectedAgentIds([...selectedAgentIds, ...missing]);
+    }
+  }, [agentMode, agents, selectedAgentIds, setSelectedAgentIds]);
+
   const handleModeChange = (mode: 'preset' | 'auto') => {
     setAgentMode(mode);
     if (mode === 'preset') {
@@ -548,8 +560,13 @@ export function AgentBar() {
       if (!hasTeacher && teacherAgent) {
         presetIds.unshift(teacherAgent.id);
       }
+      for (const requiredId of REQUIRED_CLASSROOM_AGENT_IDS) {
+        if (!presetIds.includes(requiredId) && agents.some((a) => a.id === requiredId)) {
+          presetIds.push(requiredId);
+        }
+      }
       setSelectedAgentIds(
-        presetIds.length > 0 ? presetIds : ['default-1', 'default-2', 'default-3'],
+        presetIds.length > 0 ? presetIds : [...REQUIRED_CLASSROOM_AGENT_IDS],
       );
     }
   };
@@ -557,6 +574,9 @@ export function AgentBar() {
   const toggleAgent = (agentId: string) => {
     const agent = agents.find((a) => a.id === agentId);
     if (agent?.role === 'teacher') return;
+    if (REQUIRED_CLASSROOM_AGENT_IDS.includes(agentId as (typeof REQUIRED_CLASSROOM_AGENT_IDS)[number])) {
+      return;
+    }
     if (selectedAgentIds.includes(agentId)) {
       setSelectedAgentIds(selectedAgentIds.filter((id) => id !== agentId));
     } else {

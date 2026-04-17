@@ -3,24 +3,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  Copy,
   History,
   Loader2,
   MessageSquareText,
   Pencil,
   Plus,
+  RefreshCw,
   Send,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { UNIFIED_MENTOR_PRESET } from '@/lib/orchestration/registry/classroom-presets';
 
 type TutorMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  feedback?: 'up' | 'down' | null;
 };
 
 type TutorSession = {
@@ -53,12 +59,13 @@ const QUICK_ACTIONS = [
   '总结本题关键公式',
 ];
 
-const AI_TUTOR_DETAILED_SYSTEM_PROMPT = `从现在开始，你是我的详细型AI导师。请默认使用“深入讲解模式”回答：
-- 每次先给结论，再讲原理，再给例子，再给常见错误，再给练习题
-- 回答尽量详细，除非我明确说“简短”
-- 关键概念要解释定义、用途、边界条件和对比项
-- 遇到步骤题要分步骤，不要跳步
-- 每次结尾加“你可以继续问我的3个问题”`;
+const AI_TUTOR_DETAILED_SYSTEM_PROMPT = `You are a detailed AI tutor. Use "in-depth explanation mode" by default:
+- Start with the conclusion, then explain the principle, give examples, show common mistakes, and provide practice problems
+- Answer in detail unless I explicitly say "brief"
+- For key concepts, explain the definition, purpose, boundary conditions, and comparisons
+- For step-by-step problems, show all steps without skipping
+- End your response with: "You can ask me 3 more questions"
+- Always respond in Chinese (Simplified) regardless of the language used in these instructions`;
 
 function parseSSEChunk(buffer: string) {
   const events: string[] = [];
@@ -152,6 +159,9 @@ export default function AITutorPage() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -298,6 +308,53 @@ export default function AITutorPage() {
     setErrorText('');
   };
 
+  const handleCopy = (content: string) => {
+    navigator.clipboard.writeText(content);
+  };
+
+  const handleEditMessage = (messageId: string, content: string) => {
+    setEditingMessageId(messageId);
+    setEditingContent(content);
+  };
+
+  const handleSaveEdit = () => {
+    if (!editingMessageId || !activeSession) return;
+    updateSessionMessages(activeSession.id, (prev) =>
+      prev.map((msg) => (msg.id === editingMessageId ? { ...msg, content: editingContent } : msg)),
+    );
+    setEditingMessageId(null);
+    setEditingContent('');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingContent('');
+  };
+
+  const handleRetry = async (messageId: string) => {
+    if (isTyping || !activeSession) return;
+
+    const messageIndex = activeSession.messages.findIndex((msg) => msg.id === messageId);
+    if (messageIndex === -1 || messageIndex === 0) return;
+
+    const userMessage = activeSession.messages[messageIndex - 1];
+    if (!userMessage || userMessage.role !== 'user') return;
+
+    // 删除这条AI回复及其之后的所有消息
+    const messagesToKeep = activeSession.messages.slice(0, messageIndex);
+    updateSessionMessages(activeSession.id, () => messagesToKeep);
+
+    // 重新发送用户消息
+    await handleSend(userMessage.content);
+  };
+
+  const handleFeedback = (messageId: string, feedback: 'up' | 'down' | null) => {
+    if (!activeSession) return;
+    updateSessionMessages(activeSession.id, (prev) =>
+      prev.map((msg) => (msg.id === messageId ? { ...msg, feedback } : msg)),
+    );
+  };
+
   const handleSend = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isTyping || !activeSession) return;
@@ -384,7 +441,7 @@ export default function AITutorPage() {
             whiteboardOpen: false,
           },
           config: {
-            agentIds: ['default-1'],
+            agentIds: [UNIFIED_MENTOR_PRESET.id],
             sessionType: 'qa',
             systemPromptAddendum: AI_TUTOR_DETAILED_SYSTEM_PROMPT,
           },
@@ -512,35 +569,28 @@ export default function AITutorPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto h-[calc(100vh-8rem)] flex bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-      <aside className="w-72 border-r border-gray-100 bg-[#FAFAFA] flex flex-col">
-        <div className="px-4 py-4 border-b border-gray-100">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-gray-800">
-              <History className="h-4 w-4" />
-              <span className="text-sm font-bold">历史对话</span>
-            </div>
-            <button
-              type="button"
-              disabled={isTyping}
-              onClick={handleNewSession}
-              className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-md bg-black text-white disabled:bg-gray-300"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              新建
-            </button>
-          </div>
+    <div className="h-[calc(100vh-8rem)] flex bg-[#FAFAFA]">
+      <aside
+        className={`bg-white border-r border-gray-200 flex flex-col transition-all duration-300 ${
+          sidebarCollapsed ? 'w-16' : 'w-64'
+        }`}
+      >
+        <div className={`p-4 border-b border-gray-200 ${sidebarCollapsed ? 'flex justify-center' : ''}`}>
           <button
             type="button"
             disabled={isTyping}
-            onClick={handleClearAll}
-            className="mt-2 text-xs text-gray-500 hover:text-gray-800 disabled:text-gray-300"
+            onClick={handleNewSession}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-orange-500 to-orange-600 text-white text-sm font-medium hover:from-orange-600 hover:to-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all ${
+              sidebarCollapsed ? 'p-2' : 'w-full'
+            }`}
+            title={sidebarCollapsed ? '新对话' : ''}
           >
-            清空全部历史
+            <Plus className="h-4 w-4" />
+            {!sidebarCollapsed && <span>新对话</span>}
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto p-2">
           {orderedSessions.map((session) => {
             const active = session.id === activeSessionId;
             return (
@@ -549,68 +599,82 @@ export default function AITutorPage() {
                 type="button"
                 disabled={isTyping}
                 onClick={() => setActiveSessionId(session.id)}
-                className={`w-full text-left px-4 py-3 border-b border-gray-100 transition-colors disabled:cursor-not-allowed ${
-                  active ? 'bg-white' : 'hover:bg-white/70'
+                className={`w-full text-left px-3 py-2.5 rounded-lg mb-1 transition-all disabled:cursor-not-allowed ${
+                  active
+                    ? 'bg-orange-50 text-orange-700'
+                    : 'hover:bg-gray-100 text-gray-700'
                 }`}
+                title={sidebarCollapsed ? session.title : ''}
               >
-                <p className="text-sm font-semibold text-gray-900 truncate">{session.title}</p>
-                <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-2">
-                  <MessageSquareText className="h-3 w-3" />
-                  {session.messages.length} 条消息
-                </p>
-                <p className="text-[11px] text-gray-400 mt-1">{formatSessionTime(session.updatedAt)}</p>
+                {!sidebarCollapsed ? (
+                  <>
+                    <p className="text-sm font-medium truncate">{session.title}</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">{formatSessionTime(session.updatedAt)}</p>
+                  </>
+                ) : (
+                  <div className="h-8 w-8 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600">
+                    <MessageSquareText className="h-4 w-4" />
+                  </div>
+                )}
               </button>
             );
           })}
         </div>
+
+        <div className="p-3 border-t border-gray-200">
+          <button
+            type="button"
+            disabled={isTyping}
+            onClick={handleClearAll}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all ${
+              sidebarCollapsed ? 'justify-center' : ''
+            }`}
+            title={sidebarCollapsed ? '清空对话历史' : ''}
+          >
+            <Trash2 className="h-4 w-4" />
+            {!sidebarCollapsed && <span>清空对话历史</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all mt-1 ${
+              sidebarCollapsed ? 'justify-center' : ''
+            }`}
+            title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+          >
+            {sidebarCollapsed ? (
+              <Plus className="h-4 w-4 rotate-45" />
+            ) : (
+              <>
+                <Plus className="h-4 w-4 rotate-45" />
+                <span>折叠</span>
+              </>
+            )}
+          </button>
+        </div>
       </aside>
 
-      <section className="flex-1 flex flex-col min-w-0">
-        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0 bg-white z-10">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="h-8 w-8 rounded-lg bg-black flex items-center justify-center text-white shrink-0">
-              <Bot className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-sm font-bold text-gray-900 truncate">{activeSession.title}</h2>
-              <p className="text-[10px] text-gray-500 font-medium">Markdown / LaTeX / 流式回复已开启</p>
-            </div>
-          </div>
+      <section className="flex-1 flex flex-col min-w-0 bg-white">
+        <div className="h-14 border-b border-gray-200 flex items-center px-6 shrink-0 bg-white">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={isTyping}
-              onClick={handleRenameSession}
-              className="p-2 rounded-md hover:bg-gray-100 disabled:opacity-50"
-              title="重命名会话"
-              aria-label="重命名会话"
-            >
-              <Pencil className="h-4 w-4 text-gray-600" />
-            </button>
-            <button
-              type="button"
-              disabled={isTyping}
-              onClick={handleClearCurrent}
-              className="p-2 rounded-md hover:bg-gray-100 disabled:opacity-50"
-              title="清空当前会话"
-              aria-label="清空当前会话"
-            >
-              <Trash2 className="h-4 w-4 text-gray-600" />
-            </button>
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center text-white">
+              <Bot className="h-4 w-4" />
+            </div>
+            <span className="text-sm font-semibold text-gray-800">AI 导师</span>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 scroll-smooth bg-[#FAFAFA]">
+        <div className="flex-1 overflow-y-auto scroll-smooth">
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto">
-              <div className="h-16 w-16 bg-black rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg">
+            <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto px-6">
+              <div className="h-16 w-16 bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg">
                 <Bot className="h-8 w-8" />
               </div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">今天想学习什么数学知识？</h1>
-              <p className="text-sm text-gray-500 mb-12 text-center">
-                支持 Markdown 与 LaTeX 数学公式，回复会以流式逐字呈现。
+              <h1 className="text-2xl font-semibold text-gray-900 mb-3">今天想学习什么数学知识？</h1>
+              <p className="text-sm text-gray-500 mb-10 text-center">
+                支持 Markdown 与 LaTeX 数学公式，回复会以流式逐字呈现
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
                 {[
                   '帮我复习二次函数',
                   '解释一下勾股定理并给出公式推导',
@@ -624,9 +688,9 @@ export default function AITutorPage() {
                       void handleSend(suggestion);
                     }}
                     disabled={isTyping}
-                    className="flex items-center gap-3 p-4 bg-white border border-gray-200 rounded-xl hover:border-gray-300 text-left disabled:opacity-60"
+                    className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 text-left disabled:opacity-60 transition-colors border border-gray-200"
                   >
-                    <div className="h-8 w-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 shrink-0">
+                    <div className="h-8 w-8 rounded-lg bg-white flex items-center justify-center text-orange-500 shrink-0 shadow-sm">
                       <Sparkles className="h-4 w-4" />
                     </div>
                     <span className="text-sm font-medium text-gray-700">{suggestion}</span>
@@ -635,37 +699,59 @@ export default function AITutorPage() {
               </div>
             </div>
           ) : (
-            <div className="max-w-4xl mx-auto space-y-8 pb-4">
-              {messages.map((msg) => (
-                <div key={msg.id} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                  <div className="shrink-0 mt-1">
+            <div className="max-w-3xl mx-auto py-6 px-4 space-y-6">
+              {messages.map((msg, index) => (
+                <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                  <div className="shrink-0">
                     {msg.role === 'user' ? (
-                      <div className="h-8 w-8 rounded-full bg-gray-200 border border-gray-100 flex items-center justify-center text-xs font-bold text-gray-700">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white text-xs font-semibold shadow-sm">
                         你
                       </div>
                     ) : (
-                      <div className="h-8 w-8 rounded-lg bg-black flex items-center justify-center text-white shadow-sm">
-                        <Bot className="h-5 w-5" />
+                      <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center text-white shadow-sm">
+                        <Bot className="h-4 w-4" />
                       </div>
                     )}
                   </div>
                   <div
-                    className={`max-w-[85%] text-[15px] leading-relaxed ${
+                    className={`flex-1 max-w-[90%] ${
                       msg.role === 'user' ? 'text-right' : 'text-left'
                     }`}
                   >
-                    <div className="font-bold text-xs text-gray-400 mb-1.5 uppercase tracking-wide">
-                      {msg.role === 'user' ? '你' : 'AI 导师'}
-                    </div>
                     <div
-                      className={`inline-block px-5 py-3.5 shadow-sm ${
+                      className={`inline-block px-4 py-3 rounded-2xl shadow-sm ${
                         msg.role === 'user'
-                          ? 'bg-[#111827] text-white rounded-2xl rounded-tr-sm whitespace-pre-wrap'
-                          : 'bg-white text-gray-800 rounded-2xl rounded-tl-sm border border-gray-100'
+                          ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-br-sm'
+                          : 'bg-white text-gray-800 rounded-bl-sm border border-gray-200'
                       }`}
                     >
-                      {msg.role === 'assistant' ? (
-                        <div className="ai-tutor-markdown">
+                      {editingMessageId === msg.id && msg.role === 'user' ? (
+                        <div className="flex flex-col gap-2">
+                          <textarea
+                            value={editingContent}
+                            onChange={(e) => setEditingContent(e.target.value)}
+                            className="w-full min-h-[80px] bg-white/20 text-white rounded-lg px-3 py-2 text-sm outline-none resize-y placeholder:text-white/70"
+                            autoFocus
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={handleCancelEdit}
+                              className="px-3 py-1.5 text-xs rounded-md bg-white/20 text-white hover:bg-white/30"
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSaveEdit}
+                              className="px-3 py-1.5 text-xs rounded-md bg-white text-blue-600 hover:bg-gray-100"
+                            >
+                              保存
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.role === 'assistant' ? (
+                        <div className="ai-tutor-markdown text-gray-800">
                           <ReactMarkdown
                             remarkPlugins={[remarkMath]}
                             rehypePlugins={[rehypeKatex]}
@@ -677,13 +763,13 @@ export default function AITutorPage() {
                               code: ({ children, className, ...props }) => {
                                 if (!className) {
                                   return (
-                                    <code className="px-1 py-0.5 rounded bg-gray-100 text-gray-800" {...props}>
+                                    <code className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-800 text-sm" {...props}>
                                       {children}
                                     </code>
                                   );
                                 }
                                 return (
-                                  <pre className="overflow-x-auto bg-gray-900 text-gray-100 rounded-md p-3 my-2">
+                                  <pre className="overflow-x-auto bg-gray-900 text-gray-100 rounded-lg p-3 my-2 text-sm">
                                     <code className={className} {...props}>
                                       {children}
                                     </code>
@@ -692,20 +778,90 @@ export default function AITutorPage() {
                               },
                             }}
                           >
-                            {msg.content || (isTyping ? '思考中...' : '')}
+                            {msg.content || (isTyping && index === messages.length - 1 ? '思考中...' : '')}
                           </ReactMarkdown>
                         </div>
                       ) : (
                         msg.content
                       )}
                     </div>
+                    <div className={`flex gap-1.5 mt-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      {msg.role === 'user' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleEditMessage(msg.id, msg.content)}
+                            disabled={isTyping}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                            title="编辑"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(msg.content)}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex items-center gap-1 text-xs transition-colors"
+                            title="复制"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(msg.content)}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex items-center gap-1 text-xs transition-colors"
+                            title="复制"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRetry(msg.id)}
+                            disabled={isTyping}
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                            title="重试"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleFeedback(msg.id, msg.feedback === 'up' ? null : 'up')}
+                            disabled={isTyping}
+                            className={`p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors ${
+                              msg.feedback === 'up' ? 'text-orange-600' : 'text-gray-400 hover:text-orange-600'
+                            }`}
+                            title="点赞"
+                          >
+                            <ThumbsUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleFeedback(msg.id, msg.feedback === 'down' ? null : 'down')}
+                            disabled={isTyping}
+                            className={`p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors ${
+                              msg.feedback === 'down' ? 'text-orange-600' : 'text-gray-400 hover:text-orange-600'
+                            }`}
+                            title="点踩"
+                          >
+                            <ThumbsDown className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
               {isTyping ? (
-                <div className="flex gap-2 items-center text-gray-500 text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  正在流式输出...
+                <div className="flex gap-3 items-center text-gray-400 text-sm">
+                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center text-white shadow-sm">
+                    <Bot className="h-4 w-4" />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>思考中...</span>
+                  </div>
                 </div>
               ) : null}
               <div ref={messagesEndRef} />
@@ -713,11 +869,11 @@ export default function AITutorPage() {
           )}
         </div>
 
-        <div className="p-4 bg-white border-t border-gray-100 shrink-0">
+        <div className="p-4 bg-white border-t border-gray-200 shrink-0">
           {errorText ? <p className="text-xs text-red-600 mb-2">{errorText}</p> : null}
 
-          <div className="max-w-4xl mx-auto">
-            <div className="flex flex-wrap gap-2 mb-2">
+          <div className="max-w-3xl mx-auto">
+            <div className="flex flex-wrap gap-2 mb-3">
               {QUICK_ACTIONS.map((item) => (
                 <button
                   key={item}
@@ -726,7 +882,7 @@ export default function AITutorPage() {
                   onClick={() => {
                     void handleSend(item);
                   }}
-                  className="px-3 py-1.5 text-xs rounded-full border border-gray-200 bg-[#F9F9F8] hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                  className="px-3 py-1.5 text-xs rounded-full border border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-600 disabled:opacity-50 transition-colors"
                 >
                   {item}
                 </button>
@@ -734,26 +890,28 @@ export default function AITutorPage() {
             </div>
 
             <div className="relative">
-              <input
-                type="text"
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey) {
+                    e.preventDefault();
                     void handleSend(input);
                   }
                 }}
-                placeholder="输入你的数学问题（支持让 AI 输出公式推导）..."
-                className="w-full bg-[#F4F3F0] border-none pl-4 pr-14 py-4 rounded-xl text-[15px] outline-none placeholder:text-gray-400"
+                placeholder="输入你的数学问题（按 Enter 发送，Shift + Enter 换行）..."
+                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 pr-14 text-sm outline-none resize-none placeholder:text-gray-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100 transition-all"
+                rows={1}
+                style={{ minHeight: '44px', maxHeight: '120px' }}
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
+              <div className="absolute right-2 bottom-2">
                 <button
                   type="button"
                   onClick={() => {
                     void handleSend(input);
                   }}
                   disabled={!input.trim() || isTyping}
-                  className="p-2 bg-black text-white hover:bg-gray-800 disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors"
+                  className="p-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white hover:from-orange-600 hover:to-orange-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-lg transition-all shadow-sm"
                   title="发送"
                   aria-label="发送"
                 >

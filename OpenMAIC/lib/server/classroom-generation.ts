@@ -14,7 +14,7 @@ import {
 import type { AICallFn } from '@/lib/generation/pipeline-types';
 import type { AgentInfo } from '@/lib/generation/pipeline-types';
 import { formatTeacherPersonaForPrompt } from '@/lib/generation/prompt-formatters';
-import { getDefaultAgents } from '@/lib/orchestration/registry/store';
+import { getRequiredClassroomAgentInfos } from '@/lib/orchestration/registry/classroom-presets';
 import { createLogger } from '@/lib/logger';
 import { parseModelString } from '@/lib/ai/providers';
 import { resolveApiKey, resolveWebSearchApiKey } from '@/lib/server/provider-config';
@@ -29,7 +29,6 @@ import {
 } from '@/lib/server/classroom-media-generation';
 import type { UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
-import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 
 const log = createLogger('Classroom');
 
@@ -102,65 +101,6 @@ function normalizeLanguage(language?: string): 'zh-CN' | 'en-US' {
   return language === 'en-US' ? 'en-US' : 'zh-CN';
 }
 
-function stripCodeFences(text: string): string {
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-  return cleaned.trim();
-}
-
-async function generateAgentProfiles(
-  requirement: string,
-  language: string,
-  aiCall: AICallFn,
-): Promise<AgentInfo[]> {
-  const systemPrompt =
-    'You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Return ONLY valid JSON, no markdown or explanation.';
-
-  const userPrompt = `Generate agent profiles for a course with this requirement:
-${requirement}
-
-Requirements:
-- Decide the appropriate number of agents based on the course content (typically 3-5)
-- Exactly 1 agent must have role "teacher", the rest can be "assistant" or "student"
-- Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
-- Names and personas must be in language: ${language}
-
-Return a JSON object with this exact structure:
-{
-  "agents": [
-    {
-      "name": "string",
-      "role": "teacher" | "assistant" | "student",
-      "persona": "string (2-3 sentences)"
-    }
-  ]
-}`;
-
-  const response = await aiCall(systemPrompt, userPrompt);
-  const rawText = stripCodeFences(response);
-  const parsed = JSON.parse(rawText) as {
-    agents: Array<{ name: string; role: string; persona: string }>;
-  };
-
-  if (!parsed.agents || !Array.isArray(parsed.agents) || parsed.agents.length < 2) {
-    throw new Error(`Expected at least 2 agents, got ${parsed.agents?.length ?? 0}`);
-  }
-
-  const teacherCount = parsed.agents.filter((a) => a.role === 'teacher').length;
-  if (teacherCount !== 1) {
-    throw new Error(`Expected exactly 1 teacher, got ${teacherCount}`);
-  }
-
-  return parsed.agents.map((a, i) => ({
-    id: `gen-server-${i}`,
-    name: a.name,
-    role: a.role,
-    persona: a.persona,
-  }));
-}
-
 export async function generateClassroom(
   input: GenerateClassroomInput,
   options: {
@@ -227,21 +167,13 @@ export async function generateClassroom(
   };
   const pdfText = pdfContent?.text || undefined;
 
-  // Resolve agents based on agentMode
-  let agents: AgentInfo[];
+  // Classroom role slots are fixed to guarantee mentor consistency across
+  // side-panel tutoring and classroom teaching.
   const agentMode = input.agentMode || 'default';
   if (agentMode === 'generate') {
-    log.info('Generating custom agent profiles via LLM...');
-    try {
-      agents = await generateAgentProfiles(requirement, lang, aiCall);
-      log.info(`Generated ${agents.length} agent profiles`);
-    } catch (e) {
-      log.warn('Agent profile generation failed, falling back to defaults:', e);
-      agents = getDefaultAgents();
-    }
-  } else {
-    agents = getDefaultAgents();
+    log.info('agentMode=generate received; using fixed classroom role roster by design.');
   }
+  const agents: AgentInfo[] = getRequiredClassroomAgentInfos();
   const teacherContext = formatTeacherPersonaForPrompt(agents);
 
   await options.onProgress?.({
@@ -326,19 +258,9 @@ export async function generateClassroom(
     description: undefined,
     language: lang,
     style: 'interactive',
+    agentIds: agents.map((agent) => agent.id),
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    // Embed agent configs so API-generated classrooms can hydrate
-    // the client-side agent registry without IndexedDB
-    generatedAgentConfigs: agents.map((a, i) => ({
-      id: a.id,
-      name: a.name,
-      role: a.role,
-      persona: a.persona || '',
-      avatar: AGENT_DEFAULT_AVATARS[i % AGENT_DEFAULT_AVATARS.length],
-      color: AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
-      priority: a.role === 'teacher' ? 10 : a.role === 'assistant' ? 7 : 5,
-    })),
   };
 
   const store = createInMemoryStore(stage);

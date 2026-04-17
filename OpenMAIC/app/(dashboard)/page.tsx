@@ -382,13 +382,13 @@ export default function LearningPlanPage() {
 
           <div className="flex-1 w-full min-h-[200px] mt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
+              <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                 <Pie
                   data={topicData}
                   cx="50%"
                   cy="45%"
                   innerRadius={40}
-                  outerRadius={80}
+                  outerRadius={70}
                   paddingAngle={2}
                   dataKey="value"
                   stroke="none"

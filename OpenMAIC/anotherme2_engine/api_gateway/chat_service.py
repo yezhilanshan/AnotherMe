@@ -787,7 +787,10 @@ def extract_learning_records(
     if not ai_session:
         raise ValueError("AI session not found")
 
-    owner_id = user_id or ai_session.user_id
+    if user_id and user_id != ai_session.user_id:
+        raise ValueError("AI session does not belong to user")
+
+    owner_id = ai_session.user_id
 
     messages = (
         session.query(AIChatMessage)

@@ -1,0 +1,5 @@
+app/api/problem-video/[jobId]/result-video/route.ts(103,23): error TS2345: Argument of type '"RESULT_NOT_READY"' is not assignable to parameter of type 'ApiErrorCode'.
+app/api/problem-video/[jobId]/result-video/route.ts(112,23): error TS2345: Argument of type '"FILE_FORBIDDEN"' is not assignable to parameter of type 'ApiErrorCode'.
+app/api/problem-video/[jobId]/result-video/route.ts(118,23): error TS2345: Argument of type '"FILE_NOT_FOUND"' is not assignable to parameter of type 'ApiErrorCode'.
+app/api/problem-video/[jobId]/result-video/route.ts(167,23): error TS2345: Argument of type '"FILE_NOT_FOUND"' is not assignable to parameter of type 'ApiErrorCode'.
+app/api/problem-video/[jobId]/result-video/route.ts(171,23): error TS2345: Argument of type '"FILE_FORBIDDEN"' is not assignable to parameter of type 'ApiErrorCode'.

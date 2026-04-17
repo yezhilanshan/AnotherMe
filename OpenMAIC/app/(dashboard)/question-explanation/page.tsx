@@ -1,26 +1,47 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ArrowLeft, MessageSquare, ThumbsUp, Bookmark, Share2, FileText } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
+import { buildPhotoVideoNoteId, upsertNotebookNote } from '@/lib/notebook/storage';
+
+const LATEST_VIDEO_URL = '/videos/final_from_template_with_audio_custom_raw.mp4';
+const LATEST_VIDEO_TITLE = '菱形折叠坐标法讲解（最新）';
 
 export default function QuestionExplanationPage() {
-  const [title, setTitle] = useState('题目讲解');
-  const [videoUrl, setVideoUrl] = useState('');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const title = searchParams.get('title') || LATEST_VIDEO_TITLE;
+  const videoUrl = searchParams.get('videoUrl') || LATEST_VIDEO_URL;
+  const [savedToNotebook, setSavedToNotebook] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const urlTitle = params.get('title');
-    const urlVideo = params.get('videoUrl');
+  const handleSaveToNotebook = () => {
+    const noteContent = [
+      '## 讲解步骤',
+      '- 识别题型与已知条件：系统先对图片进行 OCR 与题型归类。',
+      '- 生成解题路径：根据题型自动生成分步讲解脚本。',
+      '- 合成语音与视频：通过真实后端任务输出最终讲解视频。',
+      '',
+      '## 学习建议',
+      '如果视频中有步骤不清楚，建议补充文字条件并重新生成。',
+      '',
+      `视频地址：${videoUrl}`,
+    ].join('\n');
 
-    if (urlTitle) {
-      setTitle(urlTitle);
-    }
-    if (urlVideo) {
-      setVideoUrl(urlVideo);
-    }
-  }, []);
+    upsertNotebookNote({
+      id: buildPhotoVideoNoteId(videoUrl),
+      title: `${title} · 拍题讲解`,
+      content: noteContent,
+      subject: '数学',
+      source: 'photo-video',
+      tags: ['拍题视频', '解题讲解'],
+    });
+
+    setSavedToNotebook(true);
+    toast.success('已收藏到笔记本');
+  };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -70,7 +91,10 @@ export default function QuestionExplanationPage() {
               <button className="flex items-center gap-1.5 px-4 py-2 hover:bg-[#F4F3F0] text-gray-600 text-xs font-bold uppercase tracking-wide transition-colors">
                 <ThumbsUp className="h-4 w-4" /> 有用
               </button>
-              <button className="flex items-center gap-1.5 px-4 py-2 hover:bg-[#F4F3F0] text-gray-600 text-xs font-bold uppercase tracking-wide transition-colors">
+              <button
+                onClick={handleSaveToNotebook}
+                className="flex items-center gap-1.5 px-4 py-2 hover:bg-[#F4F3F0] text-gray-600 text-xs font-bold uppercase tracking-wide transition-colors"
+              >
                 <Bookmark className="h-4 w-4" /> 收藏
               </button>
               <button className="flex items-center gap-1.5 px-4 py-2 hover:bg-[#F4F3F0] text-gray-600 text-xs font-bold uppercase tracking-wide transition-colors">
@@ -78,6 +102,18 @@ export default function QuestionExplanationPage() {
               </button>
             </div>
           </div>
+          {savedToNotebook ? (
+            <div className="flex items-center justify-between bg-[#eef4ff] px-4 py-3 text-xs text-[#2f4a74]">
+              <span>已加入笔记本，可继续粘贴或补充个人理解。</span>
+              <button
+                type="button"
+                onClick={() => router.push('/notebook')}
+                className="font-semibold underline underline-offset-2"
+              >
+                打开笔记本
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="space-y-6">

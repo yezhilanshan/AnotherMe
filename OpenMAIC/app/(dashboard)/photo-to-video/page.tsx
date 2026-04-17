@@ -11,6 +11,7 @@ import {
   Clock,
   Filter,
   Loader2,
+  NotebookPen,
   PlayCircle,
   Upload,
   X,
@@ -56,6 +57,7 @@ interface RecentVideoItem {
 
 const STORAGE_KEY = 'anotherme:dashboard:recent-problem-videos:v1';
 const PROGRESS_STORAGE_KEY = 'anotherme:dashboard:problem-video-progress:v1';
+const PROJECT_START_KEY = 'anotherme:dashboard:project-start-flag';
 const PROGRESS_SNAPSHOT_VERSION = 1;
 const PROGRESS_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
@@ -119,6 +121,10 @@ const TIME_OPTIONS = [
 ] as const;
 type TimeFilter = (typeof TIME_OPTIONS)[number]['value'];
 
+const LATEST_LOCAL_VIDEO_URL = '/videos/final_from_template_with_audio_custom_raw.mp4';
+const LATEST_LOCAL_VIDEO_TITLE = '菱形折叠坐标法讲解（最新）';
+const LATEST_LOCAL_VIDEO_ID = 'latest-local-problem-video';
+
 function buildInitialStageStatus(): Record<string, StageStatus> {
   return PIPELINE_STAGES.reduce<Record<string, StageStatus>>((acc, stage) => {
     acc[stage.key] = 'pending';
@@ -146,20 +152,38 @@ function formatDateLabel(date: Date) {
   return `${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
+function buildLatestLocalVideoItem(): RecentVideoItem {
+  return {
+    id: LATEST_LOCAL_VIDEO_ID,
+    title: LATEST_LOCAL_VIDEO_TITLE,
+    date: formatDateLabel(new Date()),
+    duration: '01:54',
+    videoUrl: LATEST_LOCAL_VIDEO_URL,
+    status: 'succeeded',
+    subject: '数学',
+    createdAt: new Date().toISOString(),
+  };
+}
+
 function readRecentVideos(): RecentVideoItem[] {
+  const latestVideo = buildLatestLocalVideoItem();
   if (typeof window === 'undefined') return [];
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
+    if (!raw) return [latestVideo];
     const parsed = JSON.parse(raw) as RecentVideoItem[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((item) => ({
+    if (!Array.isArray(parsed)) return [latestVideo];
+    const normalized = parsed.map((item) => ({
       ...item,
-      subject: '数学',
+      subject: '数学' as const,
       createdAt: item.createdAt || new Date().toISOString(),
     }));
+    const withoutDuplicate = normalized.filter(
+      (item) => item.id !== LATEST_LOCAL_VIDEO_ID && item.videoUrl !== LATEST_LOCAL_VIDEO_URL,
+    );
+    return [latestVideo, ...withoutDuplicate].slice(0, 12);
   } catch {
-    return [];
+    return [latestVideo];
   }
 }
 
@@ -264,7 +288,7 @@ export default function PhotoToVideoPage() {
   const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState('');
   const [isUploadDragActive, setIsUploadDragActive] = useState(false);
   const [problemText, setProblemText] = useState('');
-  const generationSubject: '数学' = '数学';
+  const generationSubject = '数学' as const;
   const [isGenerating, setIsGenerating] = useState(false);
   const [isOpeningCamera, setIsOpeningCamera] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
@@ -291,50 +315,69 @@ export default function PhotoToVideoPage() {
 
   useEffect(() => {
     setRecentVideos(readRecentVideos());
-    const snapshot = readProgressSnapshot();
-    if (snapshot) {
-      const hasStaleRunningTextWithoutJob =
-        !snapshot.isGenerating &&
-        !snapshot.activeJob &&
-        (hasRunningHintText(snapshot.statusText) || hasRunningHintText(snapshot.backendStepText));
 
-      if (hasStaleRunningTextWithoutJob) {
-        clearProgressSnapshot();
-        setIsGenerating(false);
-        setStatusText('');
-        setBackendStepText('');
-        setOverallProgress(0);
-        setStageStatusMap(buildInitialStageStatus());
-        setActiveJob(null);
-        setResumeJobOnLoad(null);
-        setHasRestoredProgress(true);
-        return;
-      }
+    // 检查是否是项目重启（sessionStorage 会被清除）
+    const isProjectRestart = typeof window !== 'undefined' && !sessionStorage.getItem(PROJECT_START_KEY);
 
-      if (snapshot.isGenerating && !snapshot.activeJob) {
-        clearProgressSnapshot();
-        setIsGenerating(false);
-        setStatusText('');
-        setBackendStepText('');
-        setOverallProgress(0);
-        setStageStatusMap(buildInitialStageStatus());
-        setActiveJob(null);
-        setResumeJobOnLoad(null);
-        setHasRestoredProgress(true);
-        return;
-      }
+    if (isProjectRestart) {
+      // 项目重启时，设置标志并清除进度
+      sessionStorage.setItem(PROJECT_START_KEY, 'true');
+      clearProgressSnapshot();
+      setIsGenerating(false);
+      setStatusText('');
+      setBackendStepText('');
+      setOverallProgress(0);
+      setStageStatusMap(buildInitialStageStatus());
+      setActiveJob(null);
+      setResumeJobOnLoad(null);
+      setHasRestoredProgress(true);
+    } else {
+      // 页面刷新时，恢复之前的进度
+      const snapshot = readProgressSnapshot();
+      if (snapshot) {
+        const hasStaleRunningTextWithoutJob =
+          !snapshot.isGenerating &&
+          !snapshot.activeJob &&
+          (hasRunningHintText(snapshot.statusText) || hasRunningHintText(snapshot.backendStepText));
 
-      setIsGenerating(snapshot.isGenerating);
-      setStatusText(snapshot.statusText);
-      setBackendStepText(snapshot.backendStepText);
-      setOverallProgress(Math.max(0, Math.min(100, Math.round(snapshot.overallProgress))));
-      setStageStatusMap(normalizeStageStatusMap(snapshot.stageStatusMap));
-      setActiveJob(snapshot.activeJob);
-      if (snapshot.isGenerating && snapshot.activeJob) {
-        setResumeJobOnLoad(snapshot.activeJob);
+        if (hasStaleRunningTextWithoutJob) {
+          clearProgressSnapshot();
+          setIsGenerating(false);
+          setStatusText('');
+          setBackendStepText('');
+          setOverallProgress(0);
+          setStageStatusMap(buildInitialStageStatus());
+          setActiveJob(null);
+          setResumeJobOnLoad(null);
+          setHasRestoredProgress(true);
+          return;
+        }
+
+        if (snapshot.isGenerating && !snapshot.activeJob) {
+          clearProgressSnapshot();
+          setIsGenerating(false);
+          setStatusText('');
+          setBackendStepText('');
+          setOverallProgress(0);
+          setStageStatusMap(buildInitialStageStatus());
+          setActiveJob(null);
+          setResumeJobOnLoad(null);
+          setHasRestoredProgress(true);
+          return;
+        }
+
+        setIsGenerating(snapshot.isGenerating);
+        setStatusText(snapshot.statusText);
+        setBackendStepText(snapshot.backendStepText);
+        setOverallProgress(Math.max(0, Math.min(100, Math.round(snapshot.overallProgress))));
+        setStageStatusMap(normalizeStageStatusMap(snapshot.stageStatusMap));
+        setActiveJob(snapshot.activeJob);
+        if (snapshot.isGenerating && snapshot.activeJob) {
+          setResumeJobOnLoad(snapshot.activeJob);
+        }
       }
+      setHasRestoredProgress(true);
     }
-    setHasRestoredProgress(true);
 
     return () => {
       isMountedRef.current = false;
@@ -1140,45 +1183,67 @@ export default function PhotoToVideoPage() {
         ) : filteredRecentVideos.length === 0 ? (
           <p className="text-sm text-gray-500">当前筛选条件下暂无记录。</p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {filteredRecentVideos.map((video) => (
-              <Link
-                key={video.id}
-                href={
-                  video.videoUrl
-                    ? `/question-explanation?title=${encodeURIComponent(video.title)}&videoUrl=${encodeURIComponent(video.videoUrl)}`
-                    : '/question-explanation'
-                }
-                className="group block"
-              >
-                <div className="relative aspect-video rounded-none overflow-hidden bg-gray-100 mb-4">
-                  <div className="absolute inset-0 bg-gradient-to-br from-[#4A6FA5] via-[#6d89ba] to-[#9cb5de]" />
-                  <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors flex items-center justify-center">
-                    <PlayCircle className="h-12 w-12 text-white opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-all" />
+          <div className="max-h-[520px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {filteredRecentVideos.map((video) => (
+                <Link
+                  key={video.id}
+                  href={
+                    video.videoUrl
+                      ? `/question-explanation?title=${encodeURIComponent(video.title)}&videoUrl=${encodeURIComponent(video.videoUrl)}`
+                      : '/question-explanation'
+                  }
+                  className="group block"
+                >
+                  <div className="relative aspect-video rounded-none overflow-hidden bg-gray-100 mb-4">
+                    <div className="absolute inset-0 bg-gradient-to-br from-[#4A6FA5] via-[#6d89ba] to-[#9cb5de]" />
+                    <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                      <PlayCircle className="h-12 w-12 text-white opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-all" />
+                    </div>
+                    <div className="absolute bottom-2 right-2 bg-black/80 text-white text-[10px] font-bold px-2 py-1 uppercase tracking-wide">
+                      {video.duration}
+                    </div>
                   </div>
-                  <div className="absolute bottom-2 right-2 bg-black/80 text-white text-[10px] font-bold px-2 py-1 uppercase tracking-wide">
-                    {video.duration}
+                  <div>
+                    <h3 className="font-bold text-gray-900 text-sm mt-1 group-hover:text-[#E0573D] transition-colors line-clamp-2">
+                      {video.title}
+                    </h3>
+                    <div className="mt-2 text-[10px] font-bold uppercase tracking-wide text-[#4A6FA5]">
+                      学科：{video.subject || '未知'}
+                    </div>
+                    <div className="flex items-center gap-1 text-[10px] text-gray-400 mt-2 uppercase tracking-wide font-bold">
+                      <Clock className="h-3 w-3" />
+                      {video.date}
+                    </div>
+                    <div className="mt-2 text-[10px] font-bold uppercase tracking-wide text-gray-500">
+                      状态：{video.status === 'succeeded' ? '成功' : '失败'}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-900 text-sm mt-1 group-hover:text-[#E0573D] transition-colors line-clamp-2">
-                    {video.title}
-                  </h3>
-                  <div className="mt-2 text-[10px] font-bold uppercase tracking-wide text-[#4A6FA5]">
-                    学科：{video.subject || '未知'}
-                  </div>
-                  <div className="flex items-center gap-1 text-[10px] text-gray-400 mt-2 uppercase tracking-wide font-bold">
-                    <Clock className="h-3 w-3" />
-                    {video.date}
-                  </div>
-                  <div className="mt-2 text-[10px] font-bold uppercase tracking-wide text-gray-500">
-                    状态：{video.status === 'succeeded' ? '成功' : '失败'}
-                  </div>
-                </div>
-              </Link>
-            ))}
+                </Link>
+              ))}
+            </div>
           </div>
         )}
+      </div>
+
+      <div className="bg-white p-6 shadow-sm border border-[#ece8df]">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-gray-900">
+              <NotebookPen className="h-4 w-4 text-[#4A6FA5]" />
+              拍题笔记本
+            </h2>
+            <p className="mt-2 text-sm text-gray-600">
+              把拍题讲解内容沉淀为可编辑笔记，支持粘贴课堂知识卡片与剪贴板内容。
+            </p>
+          </div>
+          <Link
+            href="/notebook"
+            className="inline-flex items-center justify-center rounded-lg bg-black px-4 py-2 text-xs font-bold uppercase tracking-wide text-white hover:bg-gray-800"
+          >
+            打开笔记本
+          </Link>
+        </div>
       </div>
     </div>
   );

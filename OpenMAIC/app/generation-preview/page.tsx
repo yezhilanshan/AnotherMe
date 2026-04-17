@@ -27,6 +27,7 @@ import type { Stage } from '@/lib/types/stage';
 import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generation';
 import { AgentRevealModal } from '@/components/agent/agent-reveal-modal';
 import { createLogger } from '@/lib/logger';
+import { REQUIRED_CLASSROOM_AGENT_IDS } from '@/lib/orchestration/registry/classroom-presets';
 import { type GenerationSessionState, ALL_STEPS, getActiveSteps } from './types';
 import { StepVisualizer } from './components/visualizers';
 import { WorkspaceShell } from '@/components/workspace/workspace-shell';
@@ -501,6 +502,12 @@ export function GenerationPreviewContent() {
             const a = registry.getAgent(id);
             return a && !a.isGenerated;
           });
+          for (const requiredId of REQUIRED_CLASSROOM_AGENT_IDS) {
+            const requiredAgent = registry.getAgent(requiredId);
+            if (requiredAgent && !requiredAgent.isGenerated && !fallbackIds.includes(requiredId)) {
+              fallbackIds.push(requiredId);
+            }
+          }
           agents = fallbackIds
             .map((id) => registry.getAgent(id))
             .filter(Boolean)
@@ -520,6 +527,12 @@ export function GenerationPreviewContent() {
           const a = registry.getAgent(id);
           return a && !a.isGenerated;
         });
+        for (const requiredId of REQUIRED_CLASSROOM_AGENT_IDS) {
+          const requiredAgent = registry.getAgent(requiredId);
+          if (requiredAgent && !requiredAgent.isGenerated && !presetAgentIds.includes(requiredId)) {
+            presetAgentIds.push(requiredId);
+          }
+        }
         agents = presetAgentIds
           .map((id) => registry.getAgent(id))
           .filter(Boolean)
