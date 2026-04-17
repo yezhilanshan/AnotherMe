@@ -52,12 +52,14 @@ DASHSCOPE_COMPAT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 # Default text model and vision model. You can change them if needed.
 TEXT_MODEL_NAME = "qwen3.5-plus"
 VISION_MODEL_NAME = "qwen3-vl-plus"
+OCR_MODEL_NAME = "qwen-vl-ocr-latest"
 
 # Fallback Volcengine Ark config remains available if DashScope env names are not set.
 FALLBACK_ARK_API_KEY = os.getenv("ARK_API_KEY", "")
 FALLBACK_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 FALLBACK_TEXT_MODEL = "doubao-seed-2-0-pro-260215"
 FALLBACK_VISION_MODEL = "doubao-1.5-vision-pro-250328"
+FALLBACK_OCR_MODEL = FALLBACK_VISION_MODEL
 
 
 def _text_api_key() -> str:
@@ -94,6 +96,12 @@ def _vision_model() -> str:
     return FALLBACK_VISION_MODEL
 
 
+def _ocr_model() -> str:
+    if _read_api_key_from_env_name(DASHSCOPE_API_KEY_ENV_NAMES):
+        return OCR_MODEL_NAME
+    return FALLBACK_OCR_MODEL
+
+
 def build_default_llm_config() -> Dict[str, Any]:
     return {
         "api_key": _text_api_key(),
@@ -110,6 +118,16 @@ def build_vision_model_config() -> Dict[str, Any]:
         "base_url": _vision_base_url(),
         "model": _vision_model(),
         "temperature": 0.05,
+        "max_tokens": 4096,
+    }
+
+
+def build_ocr_model_config() -> Dict[str, Any]:
+    return {
+        "api_key": _vision_api_key(),
+        "base_url": _vision_base_url(),
+        "model": _ocr_model(),
+        "temperature": 0.0,
         "max_tokens": 4096,
     }
 
@@ -136,6 +154,7 @@ def build_tts_config() -> Dict[str, Any]:
 
 DEFAULT_LLM_CONFIG = build_default_llm_config()
 VISION_MODEL_CONFIG = build_vision_model_config()
+OCR_MODEL_CONFIG = build_ocr_model_config()
 VOICE_MODEL_CONFIG = build_voice_model_config()
 TTS_CONFIG = build_tts_config()
 
@@ -152,8 +171,11 @@ MANIM_CANVAS_CONFIG = {
     "pixel_height": 1080,
     "pixel_width": 1920,
     "safe_margin": 0.4,
-    "left_panel_x_max": 1.0,
+    "left_panel_x_max": 0.75,
     "right_panel_x_min": 1.8,
+    "formula_max_visible_slots": 8,
+    "formula_math_font_size": 24,
+    "formula_text_font_size": 24,
 }
 
 AGENT_CONFIGS: Dict[str, Dict[str, Any]] = {

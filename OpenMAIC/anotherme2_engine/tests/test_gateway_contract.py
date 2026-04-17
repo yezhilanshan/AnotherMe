@@ -11,19 +11,31 @@ import api_gateway.db as db_module
 from api_gateway.app import create_app
 from api_gateway.config import Settings
 from api_gateway.db import init_db, reconfigure_db, session_scope
-from api_gateway.job_service import create_or_get_job, _run_problem_video_generate
-from api_gateway.models import Job
+from api_gateway.job_service import (
+    _run_problem_video_generate,
+    create_or_get_job,
+    fail_jobs_with_missing_input_objects,
+    handle_worker_message,
+    purge_prestart_nonterminal_jobs,
+    reconcile_single_running_problem_video_job_with_artifacts,
+)
+from api_gateway.models import Job, JobArtifact
+from api_gateway.queueing import QueueMessage
 from api_gateway.schemas import CreateJobRequest, JobType, validate_job_payload
 from api_gateway.storage import LocalObjectStorage
-from api_gateway.anotherme_executor import ProblemVideoExecutionResult
+from api_gateway.anotherme_executor import MissingInputObjectError, ProblemVideoExecutionResult
 
 
 class FakeQueueClient:
     def __init__(self):
         self.items = []
+        self.dead_letters = []
 
     def enqueue(self, queue_name, message):
         self.items.append((queue_name, message))
+
+    def push_dead_letter(self, dlq_name, message):
+        self.dead_letters.append((dlq_name, message))
 
     def ping(self):
         return True
@@ -53,7 +65,6 @@ def test_idempotent_job_creation(tmp_path: Path):
     reconfigure_db(f"sqlite:///{db_path}")
     init_db()
 
-    queue = FakeQueueClient()
     settings = Settings(
         database_url=f"sqlite:///{db_path}",
         redis_url="redis://unused",
@@ -67,16 +78,14 @@ def test_idempotent_job_creation(tmp_path: Path):
     )
 
     with session_scope() as session:
-        job1, created1 = create_or_get_job(session, queue, req, settings)
+        job1, created1 = create_or_get_job(session, req, settings)
         session.flush()
-        job2, created2 = create_or_get_job(session, queue, req, settings)
+        job2, created2 = create_or_get_job(session, req, settings)
         session.flush()
 
         assert created1 is True
         assert created2 is False
         assert job1.id == job2.id
-
-    assert len(queue.items) == 1
 
 
 def test_init_db_auto_falls_back_to_sqlite_when_postgres_unreachable(tmp_path: Path, monkeypatch):
@@ -237,3 +246,243 @@ def test_problem_video_result_contract(tmp_path: Path):
             )
 
         assert set(result.keys()) == {"video_url", "duration_sec", "script_steps_count", "debug_bundle_url"}
+
+
+def test_problem_video_missing_input_is_failed_without_retry(tmp_path: Path):
+    db_path = tmp_path / "missing-input.db"
+    obj_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    queue = FakeQueueClient()
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(obj_root),
+        max_retries=2,
+    )
+    storage = LocalObjectStorage(obj_root)
+
+    with session_scope() as session:
+        job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u1",
+            idempotency_key="idem-problem-video-missing-input",
+            status="queued",
+            progress=0,
+            step="queued",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/missing.png"},
+            normalized_payload={"image_object_key": "uploads/missing.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        session.add(job)
+        session.flush()
+        message = QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name)
+
+        with patch("api_gateway.job_service.execute_job", side_effect=MissingInputObjectError("object not found")):
+            handle_worker_message(
+                session=session,
+                queue_client=queue,
+                message=message,
+                settings=settings,
+                storage=storage,
+            )
+
+        refreshed = session.get(Job, job.id)
+        assert refreshed is not None
+        assert refreshed.status == "failed"
+        assert refreshed.error_code == "JOB_INPUT_MISSING"
+        assert refreshed.attempt_count == 0
+        assert queue.items == []
+        assert queue.dead_letters == []
+
+
+def test_fail_jobs_with_missing_input_objects_marks_queued_only(tmp_path: Path):
+    db_path = tmp_path / "missing-input-cleanup.db"
+    obj_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    storage = LocalObjectStorage(obj_root)
+
+    with session_scope() as session:
+        queued_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u1",
+            idempotency_key="idem-missing-input-queued",
+            status="queued",
+            progress=0,
+            step="queued",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/missing-queued.png"},
+            normalized_payload={"image_object_key": "uploads/missing-queued.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        running_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u2",
+            idempotency_key="idem-missing-input-running",
+            status="running",
+            progress=35,
+            step="running_anotherme2",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/missing-running.png"},
+            normalized_payload={"image_object_key": "uploads/missing-running.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        healthy_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u3",
+            idempotency_key="idem-present-input",
+            status="queued",
+            progress=0,
+            step="queued",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/present.png"},
+            normalized_payload={"image_object_key": "uploads/present.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        geometry_missing_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u4",
+            idempotency_key="idem-missing-geometry",
+            status="queued",
+            progress=0,
+            step="queued",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/present-geometry.png", "geometry_file": "uploads/missing-geo.json"},
+            normalized_payload={
+                "image_object_key": "uploads/present-geometry.png",
+                "geometry_file": "uploads/missing-geo.json",
+                "output_profile": "1080p",
+            },
+            engine_state={},
+        )
+        session.add_all([queued_job, running_job, healthy_job, geometry_missing_job])
+        session.flush()
+
+        (obj_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (obj_root / "uploads" / "present.png").write_bytes(b"ok")
+        (obj_root / "uploads" / "present-geometry.png").write_bytes(b"ok")
+
+        cleaned = fail_jobs_with_missing_input_objects(
+            session,
+            storage,
+            ["q.problem_video"],
+            max_failures=5,
+        )
+
+        assert cleaned == 2
+        assert queued_job.status == "failed"
+        assert geometry_missing_job.status == "failed"
+        assert running_job.status == "running"
+        assert queued_job.error_code == "JOB_INPUT_MISSING"
+        assert geometry_missing_job.error_code == "JOB_INPUT_MISSING"
+        assert running_job.error_code is None
+        assert healthy_job.status == "queued"
+
+
+def test_reconcile_running_job_with_uploaded_artifact_marks_succeeded(tmp_path: Path):
+    db_path = tmp_path / "reconcile-running.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    with session_scope() as session:
+        job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u1",
+            idempotency_key="idem-reconcile-running",
+            status="running",
+            progress=80,
+            step="uploading_artifacts",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/present.png"},
+            normalized_payload={"image_object_key": "uploads/present.png", "output_profile": "1080p"},
+            engine_state={"duration_sec": 21.5, "script_steps_count": 5},
+        )
+        session.add(job)
+        session.flush()
+
+        session.add(
+            JobArtifact(
+                job_id=job.id,
+                artifact_type="problem_video",
+                object_key=f"jobs/{job.id}/problem_video/final.mp4",
+                url=f"http://127.0.0.1:9000/jobs/{job.id}/problem_video/final.mp4",
+                artifact_metadata=None,
+            )
+        )
+        session.flush()
+
+        changed = reconcile_single_running_problem_video_job_with_artifacts(session, job)
+        assert changed is True
+        assert job.status == "succeeded"
+        assert job.step == "completed"
+        assert job.result_payload is not None
+        assert job.result_payload.get("video_url", "").endswith("/final.mp4")
+        assert job.result_payload.get("duration_sec") == 21.5
+        assert job.result_payload.get("script_steps_count") == 5
+
+
+def test_purge_prestart_nonterminal_jobs_marks_queued_and_running_failed(tmp_path: Path):
+    db_path = tmp_path / "purge-prestart.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    with session_scope() as session:
+        queued_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u1",
+            idempotency_key="idem-prestart-queued",
+            status="queued",
+            progress=0,
+            step="queued",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/a.png"},
+            normalized_payload={"image_object_key": "uploads/a.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        running_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u2",
+            idempotency_key="idem-prestart-running",
+            status="running",
+            progress=65,
+            step="uploading_artifacts",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/b.png"},
+            normalized_payload={"image_object_key": "uploads/b.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        succeeded_job = Job(
+            job_type="problem_video_generate",
+            queue_name="q.problem_video",
+            user_id="u3",
+            idempotency_key="idem-prestart-succeeded",
+            status="succeeded",
+            progress=100,
+            step="completed",
+            max_retries=2,
+            input_payload={"image_object_key": "uploads/c.png"},
+            normalized_payload={"image_object_key": "uploads/c.png", "output_profile": "1080p"},
+            engine_state={},
+        )
+        session.add_all([queued_job, running_job, succeeded_job])
+        session.flush()
+
+        purged = purge_prestart_nonterminal_jobs(session, max_purge=10)
+        assert purged == 2
+        assert queued_job.status == "failed"
+        assert running_job.status == "failed"
+        assert queued_job.error_code == "JOB_PURGED_ON_RESTART"
+        assert running_job.error_code == "JOB_PURGED_ON_RESTART"
+        assert succeeded_job.status == "succeeded"

@@ -73,8 +73,8 @@ def _env_flag(name: str, default: bool) -> bool:
 def _should_auto_fallback(database_url: str) -> bool:
     if database_url.startswith("sqlite"):
         return False
-    is_dev_env = os.getenv("GATEWAY_ENV", "dev").strip().lower() in {"dev", "local", "development", "test"}
-    return _env_flag("GATEWAY_DB_AUTO_FALLBACK", is_dev_env)
+    # Default to disabled to avoid split-brain writes across multiple instances.
+    return _env_flag("GATEWAY_DB_AUTO_FALLBACK", False)
 
 
 def _fallback_sqlite_url() -> str:

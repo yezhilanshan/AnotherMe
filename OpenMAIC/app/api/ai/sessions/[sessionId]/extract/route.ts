@@ -1,10 +1,13 @@
 import { NextRequest } from 'next/server';
 import {
   createLearningRecordExtractJob,
-  DEFAULT_CHAT_USER_ID,
   isAnotherMe2GatewayError,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveRequestUserId } from '@/lib/auth/request-user';
+import { AuthError } from '@/lib/auth/types';
+
+export const runtime = 'nodejs';
 
 export async function POST(
   request: NextRequest,
@@ -20,10 +23,11 @@ export async function POST(
       userId?: string;
       extractVersion?: string;
     };
+    const userId = await resolveRequestUserId(request, body.userId);
 
     const job = await createLearningRecordExtractJob({
       sessionId,
-      userId: (body.userId || DEFAULT_CHAT_USER_ID).trim(),
+      userId,
       extractVersion: body.extractVersion,
     });
 
@@ -37,6 +41,9 @@ export async function POST(
       202,
     );
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }

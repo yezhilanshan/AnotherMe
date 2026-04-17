@@ -8,7 +8,7 @@
 import { proxyFetch } from '@/lib/server/proxy-fetch';
 import type { WebSearchResult, WebSearchSource } from '@/lib/types/web-search';
 
-const TAVILY_API_URL = 'https://api.tavily.com/search';
+const TAVILY_DEFAULT_API_URL = 'https://api.tavily.com/search';
 
 const TAVILY_MAX_QUERY_LENGTH = 400;
 
@@ -19,13 +19,15 @@ export async function searchWithTavily(params: {
   query: string;
   apiKey: string;
   maxResults?: number;
+  baseUrl?: string;
 }): Promise<WebSearchResult> {
-  const { query, apiKey, maxResults = 5 } = params;
+  const { query, apiKey, maxResults = 5, baseUrl } = params;
 
   // Tavily rejects queries over 400 characters with a 400 error
   const truncatedQuery = query.slice(0, TAVILY_MAX_QUERY_LENGTH);
+  const targetUrl = baseUrl?.trim() || TAVILY_DEFAULT_API_URL;
 
-  const res = await proxyFetch(TAVILY_API_URL, {
+  const res = await proxyFetch(targetUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -137,4 +137,73 @@ describe('problem-video routes', () => {
       debugBundleUrl: 'http://127.0.0.1:9000/jobs/job_456/problem_video/debug_bundle.zip',
     });
   });
+
+  it('rewrites local filesystem video path to stream endpoint', async () => {
+    const { GET } = await import('@/app/api/problem-video/[jobId]/route');
+
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          job_id: 'job_local',
+          job_type: 'problem_video_generate',
+          status: 'succeeded',
+          progress: 100,
+          step: 'completed',
+          error_message: null,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          job_id: 'job_local',
+          status: 'succeeded',
+          result: {
+            video_url:
+              'D:\\AnotherMe-V3\\OpenMAIC\\anotherme2_engine\\gateway_data\\objects\\jobs\\job_local\\problem_video\\final.mp4',
+            duration_sec: 12.3,
+            script_steps_count: 4,
+            debug_bundle_url: null,
+          },
+        }),
+      });
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/problem-video/job_local'),
+      { params: Promise.resolve({ jobId: 'job_local' }) },
+    );
+
+    const json = await response.json();
+    expect(response.status).toBe(200);
+    expect(json.success).toBe(true);
+    expect(json.result.videoUrl).toBe('/api/problem-video/job_local/result-video');
+  });
+
+  it('normalizes job-not-found to failed terminal state for polling', async () => {
+    const { GET } = await import('@/app/api/problem-video/[jobId]/route');
+
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        error_code: 'JOB_NOT_FOUND',
+        message: 'Job not found',
+      }),
+    });
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/problem-video/job_missing'),
+      { params: Promise.resolve({ jobId: 'job_missing' }) },
+    );
+
+    const json = await response.json();
+    expect(response.status).toBe(200);
+    expect(json.success).toBe(true);
+    expect(json.status).toBe('failed');
+    expect(json.step).toBe('failed');
+    expect(json.errorMessage).toContain('任务不存在');
+  });
 });

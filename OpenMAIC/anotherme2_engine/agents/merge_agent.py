@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
@@ -33,11 +34,18 @@ class MergeAgent(BaseAgent):
         self.manim_quality = config.get("manim_quality", "-ql")
         self.render_timeout = int(config.get("render_timeout", 900))
         self.max_repair_rounds = int(config.get("max_repair_rounds", 2))
+        media_root = config.get("manim_media_root")
+        self.manim_media_root = (
+            Path(str(media_root))
+            if media_root
+            else Path(tempfile.gettempdir()) / "am2_manim"
+        )
+        self.keep_manim_media = bool(config.get("keep_manim_media", False))
         self.canvas_config = config.get("canvas_config", {
             "frame_height": 8.0,
             "frame_width": 14.222,
             "safe_margin": 0.4,
-            "left_panel_x_max": 1.0,
+            "left_panel_x_max": 0.75,
             "right_panel_x_min": 1.8,
         })
         self.layout = config.get("layout", "left_graph_right_formula")
@@ -455,6 +463,11 @@ class MergeAgent(BaseAgent):
             if not self._is_partial_manim_artifact(path)
         }
 
+    def _resolve_manim_media_dir(self, manim_file: str, class_name: str) -> Path:
+        self.manim_media_root.mkdir(parents=True, exist_ok=True)
+        # 每次渲染使用唯一目录，避免并发任务共享目录时互相清理。
+        return Path(tempfile.mkdtemp(prefix="m_", dir=str(self.manim_media_root)))
+
     def _select_rendered_mp4(
         self,
         media_dir: Path,
@@ -507,10 +520,11 @@ class MergeAgent(BaseAgent):
         Returns:
             (是否成功, 错误信息)
         """
+        media_dir: Optional[Path] = None
         try:
-            media_dir = self.output_dir / "media"
+            media_dir = self._resolve_manim_media_dir(manim_file, class_name)
             pre_existing_mp4s = self._collect_non_partial_mp4_state(media_dir)
-            # 用 --media_dir 控制输出目录，避免路径修得问题
+            # 使用短 media_dir，避免 Windows 下 partial_movie_files 路径过长。
             cmd = [
                 "manim", self.manim_quality,
                 "--format=mp4",
@@ -550,6 +564,9 @@ class MergeAgent(BaseAgent):
         except Exception as e:
             print(f"Manim 渲染异常：{e}")
             return False, str(e)
+        finally:
+            if media_dir is not None and (not self.keep_manim_media):
+                shutil.rmtree(media_dir, ignore_errors=True)
 
     def _merge_audio_video(self, video_file: str, audio_file: str, output_file: str) -> bool:
         """

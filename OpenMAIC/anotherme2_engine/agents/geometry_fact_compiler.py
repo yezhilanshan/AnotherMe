@@ -185,14 +185,15 @@ class GeometryFactCompiler:
                 continue
             if primitive_type in self.MEASUREMENT_TYPES:
                 compiled = self._compile_measurement(
-                raw_primitive,
-                measurement_type=primitive_type,
-                register_point=register_point,
-                segment_points=segment_points,
-                named_angles=named_angles,
-            )
-            if compiled is not None:
-                measurements.append(compiled)
+                    raw_primitive,
+                    measurement_type=primitive_type,
+                    register_point=register_point,
+                    segment_points=segment_points,
+                    named_angles=named_angles,
+                )
+                if compiled is not None:
+                    measurements.append(compiled)
+                continue
 
         relation_items = list(facts.get("relations") or []) + list(facts.get("constraints") or [])
         for raw_relation in relation_items:
@@ -223,17 +224,31 @@ class GeometryFactCompiler:
             if compiled is not None:
                 measurements.append(compiled)
 
-        self._ensure_polygon_edges(
-            primitives=primitives,
-            register_point=register_point,
-            segment_points=segment_points,
-        )
+        explicit_segment_pairs = {
+            frozenset(points)
+            for points in segment_points.values()
+            if len(points) == 2
+        }
+        explicit_polygon_point_sets = {
+            tuple(str(item).strip() for item in (primitive.get("points") or []) if str(item).strip())
+            for primitive in primitives
+            if str(primitive.get("type", "")).strip().lower() == "polygon"
+        }
+
         self._annotate_fold_point_derivations(
             facts=facts,
             problem_text=problem_text,
             point_payloads=point_payloads,
             register_point=register_point,
             segment_points=segment_points,
+        )
+        reflected_point_ids = self._reflected_point_ids(point_payloads)
+
+        self._ensure_polygon_edges(
+            primitives=primitives,
+            register_point=register_point,
+            segment_points=segment_points,
+            reflected_point_ids=reflected_point_ids,
         )
         constraints.extend(
             self._infer_constraints_from_text(
@@ -263,6 +278,17 @@ class GeometryFactCompiler:
             measurements=measurements,
         )
         measurements = self._sanitize_measurements(measurements)
+
+        if self._has_fold_semantics(problem_text, templates):
+            primitives, constraints, measurements = self._apply_fold_guardrails(
+                primitives=primitives,
+                constraints=constraints,
+                measurements=measurements,
+                reflected_point_ids=reflected_point_ids,
+                explicit_segment_pairs=explicit_segment_pairs,
+                explicit_polygon_point_sets=explicit_polygon_point_sets,
+            )
+
         display = self._infer_display(
             facts=facts,
             primitives=primitives,
@@ -1242,15 +1268,19 @@ class GeometryFactCompiler:
         primitives: List[Dict[str, Any]],
         register_point,
         segment_points: Dict[str, Tuple[str, str]],
+        reflected_point_ids: Optional[set[str]] = None,
     ) -> None:
         existing_pairs = {frozenset(points) for points in segment_points.values() if len(points) == 2}
         additions: List[Dict[str, Any]] = []
+        reflected = set(reflected_point_ids or set())
         for primitive in primitives:
             if str(primitive.get("type", "")).strip().lower() != "polygon":
                 continue
             refs = [register_point(item) for item in (primitive.get("points") or [])]
             refs = [item for item in refs if item]
             if len(refs) < 3:
+                continue
+            if reflected and any(ref in reflected for ref in refs):
                 continue
             for index, start in enumerate(refs):
                 end = refs[(index + 1) % len(refs)]
@@ -1262,6 +1292,105 @@ class GeometryFactCompiler:
                 segment_points[segment_id] = (start, end)
                 existing_pairs.add(pair)
         primitives.extend(additions)
+
+    def _reflected_point_ids(self, point_payloads: Dict[str, Dict[str, Any]]) -> set:
+        reflected: set = set()
+        for point_id, payload in point_payloads.items():
+            if not isinstance(payload, dict):
+                continue
+            derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
+            if str(derived.get("type", "")).strip().lower() == "reflect_point":
+                reflected.add(str(point_id).strip())
+        return reflected
+
+    def _has_fold_semantics(self, problem_text: str, templates: Sequence[str]) -> bool:
+        if any(str(item).strip().lower() == "fold" for item in templates):
+            return True
+        normalized_text = self._normalize_prime_markers(problem_text)
+        return bool(re.search(r"折叠|翻折|对折|折痕|fold|reflect", normalized_text, flags=re.IGNORECASE))
+
+    def _apply_fold_guardrails(
+        self,
+        *,
+        primitives: Sequence[Dict[str, Any]],
+        constraints: Sequence[Dict[str, Any]],
+        measurements: Sequence[Dict[str, Any]],
+        reflected_point_ids: set,
+        explicit_segment_pairs: set,
+        explicit_polygon_point_sets: set,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if not reflected_point_ids:
+            return list(primitives), list(constraints), list(measurements)
+
+        kept_primitives: List[Dict[str, Any]] = []
+        removed_primitive_ids: set = set()
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                kept_primitives.append(primitive)
+                continue
+            primitive_id = str(primitive.get("id", "")).strip()
+            primitive_type = str(primitive.get("type", "")).strip().lower()
+            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+
+            if primitive_type == "polygon":
+                polygon_points = tuple(refs)
+                if any(ref in reflected_point_ids for ref in refs):
+                    # Keep only explicitly provided reflected-face polygons; drop auto-expanded ones.
+                    if polygon_points not in explicit_polygon_point_sets:
+                        if primitive_id:
+                            removed_primitive_ids.add(primitive_id)
+                        continue
+
+            if primitive_type == "segment" and len(refs) == 2:
+                pair = frozenset((refs[0], refs[1]))
+                if any(ref in reflected_point_ids for ref in refs) and pair not in explicit_segment_pairs:
+                    if primitive_id:
+                        removed_primitive_ids.add(primitive_id)
+                    continue
+
+            kept_primitives.append(primitive)
+
+        kept_primitive_ids = {
+            str(item.get("id", "")).strip()
+            for item in kept_primitives
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+
+        kept_constraints: List[Dict[str, Any]] = []
+        for constraint in constraints:
+            if not isinstance(constraint, dict):
+                kept_constraints.append(constraint)
+                continue
+            entities = [str(item).strip() for item in (constraint.get("entities") or []) if str(item).strip()]
+            if any(item in removed_primitive_ids for item in entities):
+                continue
+            relation_type = str(constraint.get("type", "")).strip().lower()
+            if relation_type in {
+                "point_on_segment",
+                "midpoint",
+                "point_in_polygon",
+                "point_outside_polygon",
+                "parallel",
+                "perpendicular",
+                "equal_length",
+                "intersect",
+            }:
+                primitive_refs = [item for item in entities if item.startswith("seg_") or item.startswith("poly_")]
+                if any(item not in kept_primitive_ids for item in primitive_refs):
+                    continue
+            kept_constraints.append(constraint)
+
+        kept_measurements: List[Dict[str, Any]] = []
+        for measurement in measurements:
+            if not isinstance(measurement, dict):
+                kept_measurements.append(measurement)
+                continue
+            entities = [str(item).strip() for item in (measurement.get("entities") or []) if str(item).strip()]
+            if any(item in removed_primitive_ids for item in entities):
+                continue
+            kept_measurements.append(measurement)
+
+        return kept_primitives, kept_constraints, kept_measurements
 
     def _infer_constraints_from_text(
         self,
@@ -1362,12 +1491,14 @@ class GeometryFactCompiler:
             if primitive_type == "segment":
                 payload.setdefault("style", "solid")
                 payload.setdefault("role", "interior_link")
+                payload.setdefault("source", "given")
             elif primitive_type == "polygon":
                 payload.setdefault("role", "polygon")
         for segment_id in construction_segments:
             payload = display["primitives"].setdefault(segment_id, {})
             payload["style"] = "dashed"
             payload["role"] = "construction"
+            payload["source"] = "approved_auxiliary"
 
         return display
 

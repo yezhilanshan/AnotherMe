@@ -21,16 +21,45 @@ class SceneGraphUpdater:
         extracted_focus = self._extract_focus_entities(current_scene, step)
         teaching_focus = self._collect_teaching_focus_targets(teaching_step)
         focus_entities = self._merge_focus_targets(extracted_focus, teaching_focus)
+
+        teaching_actions = (
+            teaching_step.get("actions", [])
+            if isinstance(teaching_step, dict)
+            else []
+        )
+        required_actions = (
+            teaching_step.get("required_actions", [])
+            if isinstance(teaching_step, dict)
+            else []
+        )
+        animation_policy = self._resolve_animation_policy(teaching_step)
+        explicit_actions_present = bool(teaching_actions) or bool(required_actions)
+
         operations: List[Dict[str, Any]] = []
         operations.extend(
             self._operations_from_teaching_actions(
-                teaching_step.get("actions", []) if isinstance(teaching_step, dict) else [],
+                [*(teaching_actions or []), *(required_actions or [])],
                 focus_entities,
             )
         )
-        operations.extend(self._infer_operations(step, focus_entities))
+
+        has_transform_operation = any(
+            str(item.get("type", "")).strip().lower() == "transform"
+            for item in operations
+        )
+        if animation_policy == "auto" and not has_transform_operation and (
+            (not explicit_actions_present) or self._step_mentions_transform(step)
+        ):
+            operations.extend(self._infer_operations(step, focus_entities))
+
         operations = self._dedupe_operations(operations)
         current_scene = self._apply_operations(current_scene, operations, focus_entities, step_index)
+        current_scene = self._apply_visibility_policy(
+            current_scene,
+            teaching_step=teaching_step,
+            focus_entities=focus_entities,
+        )
+        allow_geometry_motion = self._has_geometry_motion(base_scene_graph, current_scene, operations)
 
         return {
             "step_id": step.id,
@@ -39,7 +68,93 @@ class SceneGraphUpdater:
             "focus_entities": focus_entities,
             "operations": operations,
             "scene": current_scene,
+            "allow_geometry_motion": allow_geometry_motion,
         }
+
+    def _step_mentions_transform(self, step: Any) -> bool:
+        cue_text = "\n".join([
+            str(getattr(step, "title", "") or ""),
+            str(getattr(step, "narration", "") or ""),
+            " ".join(str(item) for item in (getattr(step, "visual_cues", []) or [])),
+        ])
+        if not any(keyword in cue_text for keyword in ["折叠", "旋转", "翻折"]):
+            return False
+
+        suppress_keywords = [
+            "不折叠",
+            "不执行折叠",
+            "仅观察",
+            "先观察",
+            "仅高亮",
+            "只高亮",
+            "高亮折叠轴",
+            "标出折叠轴",
+            "识别折叠轴",
+        ]
+        if any(keyword in cue_text for keyword in suppress_keywords):
+            return False
+
+        # 仅提到“折叠轴”通常是讲解/识别步骤，不应默认触发几何变换。
+        if "折叠轴" in cue_text and not any(keyword in cue_text for keyword in ["沿", "折叠后", "翻折后", "得到", "执行"]):
+            return False
+
+        return True
+
+    def _scene_points(self, scene_graph: Dict[str, Any]) -> Dict[str, List[float]]:
+        result: Dict[str, List[float]] = {}
+        if not isinstance(scene_graph, dict):
+            return result
+
+        points = scene_graph.get("points") or {}
+        if isinstance(points, dict):
+            for point_id, payload in points.items():
+                if not isinstance(payload, dict):
+                    continue
+                coord = payload.get("coord")
+                pos = coord if isinstance(coord, list) and len(coord) == 2 else payload.get("pos")
+                if not isinstance(pos, list) or len(pos) != 2:
+                    continue
+                try:
+                    result[str(point_id)] = [float(pos[0]), float(pos[1])]
+                except (TypeError, ValueError):
+                    continue
+            return result
+
+        if isinstance(points, list):
+            for item in points:
+                if not isinstance(item, dict):
+                    continue
+                point_id = str(item.get("id", "")).strip()
+                coord = item.get("coord")
+                if not point_id or not isinstance(coord, list) or len(coord) != 2:
+                    continue
+                try:
+                    result[point_id] = [float(coord[0]), float(coord[1])]
+                except (TypeError, ValueError):
+                    continue
+
+        return result
+
+    def _has_geometry_motion(
+        self,
+        before_scene: Dict[str, Any],
+        after_scene: Dict[str, Any],
+        operations: List[Dict[str, Any]],
+        eps: float = 1e-6,
+    ) -> bool:
+        has_transform = any(str(item.get("type", "")).strip().lower() == "transform" for item in operations)
+        if not has_transform:
+            return False
+
+        before_points = self._scene_points(before_scene)
+        after_points = self._scene_points(after_scene)
+        for point_id, after_pos in after_points.items():
+            before_pos = before_points.get(point_id)
+            if before_pos is None:
+                continue
+            if abs(after_pos[0] - before_pos[0]) > eps or abs(after_pos[1] - before_pos[1]) > eps:
+                return True
+        return False
 
     def _apply_operations(
         self,
@@ -287,8 +402,8 @@ class SceneGraphUpdater:
         for item in actions:
             if not isinstance(item, dict):
                 continue
-            action_name = str(item.get("action", "")).strip().lower()
-            targets = [str(token).strip() for token in (item.get("targets") or fallback_focus or []) if str(token).strip()]
+            action_name = str(item.get("action") or item.get("type") or "").strip().lower()
+            targets = self._action_targets(item, fallback_focus)
 
             if action_name in {"show_original_figure", "maintain_scene"}:
                 operations.append(
@@ -300,7 +415,15 @@ class SceneGraphUpdater:
                 )
                 continue
 
-            if action_name in {"highlight_entity", "highlight_fold_axis", "highlight_relation"}:
+            if action_name in {
+                "highlight_entity",
+                "highlight_fold_axis",
+                "highlight_relation",
+                "highlight_segment",
+                "highlight_angle",
+                "highlight_triangle",
+                "highlight_parallel",
+            }:
                 if action_name == "highlight_fold_axis":
                     axis = str(item.get("axis", "")).strip()
                     targets = [axis] if axis else targets
@@ -312,17 +435,33 @@ class SceneGraphUpdater:
                 )
                 continue
 
-            if action_name in {"animate_fold", "create_image_point", "show_fold_invariants"}:
+            if action_name in {
+                "animate_fold",
+                "create_image_point",
+                "show_fold_invariants",
+                "reflect_point_over_line",
+                "move_point",
+            }:
                 op_targets = targets or fallback_focus
                 op: Dict[str, Any] = {
                     "type": "transform",
                     "targets": op_targets,
                     "mode": "fold",
                 }
-                axis = str(item.get("axis", "")).strip()
+                axis = str(item.get("axis") or item.get("to_line") or item.get("line") or "").strip()
                 if axis:
                     op["axis"] = axis
                 operations.append(op)
+                continue
+
+            if action_name in {"show_point", "show_segment", "show_auxiliary_segment", "fade_out_object"}:
+                operations.append(
+                    {
+                        "type": "maintain",
+                        "targets": targets,
+                        "reason": action_name,
+                    }
+                )
                 continue
 
             if action_name in {
@@ -345,7 +484,124 @@ class SceneGraphUpdater:
                 )
                 continue
 
+            # 严格执行模式下，未知动作直接忽略，避免自由发挥引入噪声动画。
+
         return operations
+
+    def _resolve_animation_policy(self, teaching_step: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(teaching_step, dict):
+            return "auto"
+        policy = str(teaching_step.get("animation_policy", "auto") or "auto").strip().lower()
+        if policy in {"auto", "required", "none"}:
+            return policy
+        return "auto"
+
+    def _action_targets(self, action: Dict[str, Any], fallback_focus: List[str]) -> List[str]:
+        targets = [
+            str(token).strip()
+            for token in (action.get("targets") or [])
+            if str(token).strip()
+        ]
+        target = str(action.get("target", "")).strip()
+        if target and target not in targets:
+            targets.insert(0, target)
+        if not targets:
+            targets = [str(token).strip() for token in (fallback_focus or []) if str(token).strip()]
+        return targets
+
+    def _apply_visibility_policy(
+        self,
+        scene_graph: Dict[str, Any],
+        *,
+        teaching_step: Optional[Dict[str, Any]],
+        focus_entities: List[str],
+    ) -> Dict[str, Any]:
+        scene = copy.deepcopy(scene_graph or {})
+        primitives = scene.get("primitives") if isinstance(scene.get("primitives"), list) else []
+        display = scene.setdefault("display", {}) if isinstance(scene, dict) else {}
+        primitive_display = display.setdefault("primitives", {}) if isinstance(display, dict) else {}
+
+        visible_segments_raw = []
+        if isinstance(teaching_step, dict):
+            visible_segments_raw = list(teaching_step.get("visible_segments") or [])
+        visible_norm = {
+            self._normalize_segment_token(item)
+            for item in visible_segments_raw
+            if self._normalize_segment_token(item)
+        }
+        focus_norm = {
+            self._normalize_segment_token(item)
+            for item in (focus_entities or [])
+            if self._normalize_segment_token(item)
+        }
+
+        scene_segment_norm: Set[str] = set()
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                continue
+            if str(primitive.get("type", "")).strip().lower() != "segment":
+                continue
+            segment_id = str(primitive.get("id", "")).strip()
+            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            scene_segment_norm.update(
+                {
+                    token
+                    for token in {
+                        self._normalize_segment_token(segment_id),
+                        self._normalize_segment_token("".join(refs)),
+                        self._normalize_segment_token("seg_" + "".join(refs)),
+                    }
+                    if token
+                }
+            )
+
+        if visible_norm and not (visible_norm & scene_segment_norm):
+            visible_norm = set()
+
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                continue
+            if str(primitive.get("type", "")).strip().lower() != "segment":
+                continue
+
+            segment_id = str(primitive.get("id", "")).strip()
+            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            payload = primitive_display.setdefault(segment_id, {}) if segment_id else {}
+            source = str(payload.get("source", "")).strip().lower()
+            if not source:
+                role = str(payload.get("role", "")).strip().lower()
+                style = str(payload.get("style", "")).strip().lower()
+                source = "approved_auxiliary" if role == "construction" or style == "dashed" else "given"
+                payload["source"] = source
+
+            alias_norm = {
+                self._normalize_segment_token(segment_id),
+                self._normalize_segment_token("".join(refs)),
+                self._normalize_segment_token("seg_" + "".join(refs)),
+            }
+            alias_norm = {item for item in alias_norm if item}
+
+            if visible_norm:
+                payload["show"] = bool(alias_norm & visible_norm)
+                continue
+
+            if source in {"derived", "temporary", "invalid"} and not (alias_norm & focus_norm):
+                payload["show"] = False
+
+        return scene
+
+    def _normalize_segment_token(self, token: Any) -> str:
+        raw = str(token or "").strip()
+        if not raw:
+            return ""
+        if raw.lower().startswith("seg_"):
+            raw = raw[4:]
+        raw = raw.replace("′", "1").replace("'", "1").replace(" ", "")
+        refs = re.findall(r"[A-Za-z]\d*", raw)
+        if len(refs) == 2:
+            a, b = refs[0].upper(), refs[1].upper()
+            return "".join(sorted([a, b]))
+        return ""
 
     def _dedupe_operations(self, operations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         unique: List[Dict[str, Any]] = []

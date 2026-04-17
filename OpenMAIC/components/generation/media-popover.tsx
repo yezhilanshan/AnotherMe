@@ -47,7 +47,9 @@ const IMAGE_PROVIDER_ICONS: Record<string, string> = {
   seedream: '/logos/doubao.svg',
   'qwen-image': '/logos/bailian.svg',
   'nano-banana': '/logos/gemini.svg',
+  'minimax-image': '/logos/minimax.svg',
   'grok-image': '/logos/grok.svg',
+  'liblib-image': '/logos/liblib.svg',
 };
 const VIDEO_PROVIDER_ICONS: Record<string, string> = {
   seedance: '/logos/doubao.svg',

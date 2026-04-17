@@ -14,6 +14,10 @@ class ScriptStep:
     narration: str
     visual_cues: List[str]
     on_screen_texts: List[Dict[str, Any]] = field(default_factory=list)
+    spoken_formulas: List[str] = field(default_factory=list)
+    visible_segments: List[str] = field(default_factory=list)
+    required_actions: List[Dict[str, Any]] = field(default_factory=list)
+    animation_policy: str = "auto"
     manim_code: Optional[str] = None
     audio_file: Optional[str] = None
     audio_duration: Optional[float] = None

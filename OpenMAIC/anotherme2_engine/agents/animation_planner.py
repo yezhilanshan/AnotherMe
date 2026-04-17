@@ -61,10 +61,36 @@ class AnimationPlanner:
         }
 
     def _extract_formula_items(self, step: Any) -> List[str]:
+        max_items = 6
+
+        spoken_formulas = self._extract_from_spoken_formulas(getattr(step, "spoken_formulas", []) or [])
+
         # 优先使用脚本侧结构化屏幕文案（允许描述性文字进入公式区）
         on_screen_items = getattr(step, "on_screen_texts", []) or []
         prioritized = self._extract_from_on_screen_texts(on_screen_items)
-        max_items = 6
+
+        if spoken_formulas:
+            merged = list(spoken_formulas)
+            seen = {item for item in merged}
+            for item in prioritized:
+                if item not in seen:
+                    seen.add(item)
+                    merged.append(item)
+
+            # spoken_formulas 不足时补充旁白/视觉中可识别的公式片段。
+            extras: List[str] = []
+            texts = [step.title, *step.visual_cues, step.narration]
+            for text in texts:
+                if not text:
+                    continue
+                for match in self._extract_formula_fragments(str(text)):
+                    cleaned = self._normalize_formula_candidate(match)
+                    if not cleaned or cleaned in seen:
+                        continue
+                    seen.add(cleaned)
+                    extras.append(cleaned)
+            return (merged + extras)[:max_items]
+
         if prioritized:
             # 若结构化文案较少，补充从旁白/视觉中抽取到的公式片段，避免单幕信息过少。
             seen = {item for item in prioritized}
@@ -97,6 +123,23 @@ class AnimationPlanner:
                 candidates.append(cleaned)
 
         return candidates[:max_items]
+
+    def _extract_from_spoken_formulas(self, items: Any) -> List[str]:
+        if not isinstance(items, list):
+            return []
+        result: List[str] = []
+        seen = set()
+        for item in items:
+            if isinstance(item, dict):
+                text = str(item.get("latex") or item.get("text") or "").strip()
+            else:
+                text = str(item).strip()
+            cleaned = self._normalize_display_text(text)
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            result.append(cleaned)
+        return result
 
     def _extract_from_on_screen_texts(self, items: List[Dict[str, Any]]) -> List[str]:
         scored: List[tuple] = []

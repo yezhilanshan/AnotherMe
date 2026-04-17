@@ -68,6 +68,22 @@ export interface GatewayMessage {
   attachments: GatewayAttachment[];
 }
 
+export interface GatewayConversationMember {
+  conversation_id: string;
+  user_id: string;
+  joined_at: string;
+  mute_flag: boolean;
+  unread_count: number;
+  last_read_message_id?: string | null;
+  last_read_seq: number;
+}
+
+export interface GatewayRemoveConversationMemberResult {
+  conversation_id: string;
+  member_user_id: string;
+  removed: boolean;
+}
+
 export interface GatewayAIChatSession {
   session_id: string;
   user_id: string;
@@ -287,12 +303,60 @@ export async function createGatewayConversation(params: {
   });
 }
 
+export async function listGatewayConversationMembers(params: {
+  conversationId: string;
+  userId: string;
+}): Promise<GatewayConversationMember[]> {
+  const query = new URLSearchParams({ user_id: params.userId });
+  return gatewayFetch<GatewayConversationMember[]>(
+    `/v1/messages/${params.conversationId}/members?${query.toString()}`,
+  );
+}
+
+export async function addGatewayConversationMembers(params: {
+  conversationId: string;
+  operatorUserId: string;
+  memberIds: string[];
+}): Promise<GatewayConversationMember[]> {
+  return gatewayFetch<GatewayConversationMember[]>(`/v1/messages/${params.conversationId}/members`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      operator_user_id: params.operatorUserId,
+      member_ids: params.memberIds,
+    }),
+  });
+}
+
+export async function removeGatewayConversationMember(params: {
+  conversationId: string;
+  memberUserId: string;
+  operatorUserId: string;
+}): Promise<GatewayRemoveConversationMemberResult> {
+  const encodedMemberUserId = encodeURIComponent(params.memberUserId);
+  return gatewayFetch<GatewayRemoveConversationMemberResult>(
+    `/v1/messages/${params.conversationId}/members/${encodedMemberUserId}`,
+    {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        operator_user_id: params.operatorUserId,
+      }),
+    },
+  );
+}
+
 export async function listGatewayMessages(params: {
   conversationId: string;
+  userId: string;
   limit?: number;
   beforeSeq?: number;
 }): Promise<GatewayMessage[]> {
-  const query = new URLSearchParams();
+  const query = new URLSearchParams({ user_id: params.userId });
   if (typeof params.limit === 'number') {
     query.set('limit', String(params.limit));
   }

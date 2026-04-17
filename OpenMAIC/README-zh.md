@@ -129,6 +129,9 @@ TTS_MINIMAX_BASE_URL=https://api.minimaxi.com
 IMAGE_MINIMAX_API_KEY=...
 IMAGE_MINIMAX_BASE_URL=https://api.minimaxi.com
 
+IMAGE_LIBLIB_API_KEY=...
+IMAGE_LIBLIB_BASE_URL=https://openapi.liblib.ai
+
 VIDEO_MINIMAX_API_KEY=...
 VIDEO_MINIMAX_BASE_URL=https://api.minimaxi.com
 ```

@@ -1,10 +1,13 @@
 import { NextRequest } from 'next/server';
 import {
   createGatewayAIMessageFeedback,
-  DEFAULT_CHAT_USER_ID,
   isAnotherMe2GatewayError,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveRequestUserId } from '@/lib/auth/request-user';
+import { AuthError } from '@/lib/auth/types';
+
+export const runtime = 'nodejs';
 
 export async function POST(
   request: NextRequest,
@@ -25,16 +28,20 @@ export async function POST(
     if (!body.rating) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'rating is required');
     }
+    const userId = await resolveRequestUserId(request, body.userId);
 
     const feedback = await createGatewayAIMessageFeedback({
       messageId,
-      userId: (body.userId || DEFAULT_CHAT_USER_ID).trim(),
+      userId,
       rating: body.rating,
       feedbackText: body.feedbackText,
     });
 
     return apiSuccess({ feedback }, 201);
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }

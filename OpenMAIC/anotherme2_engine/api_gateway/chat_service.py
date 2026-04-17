@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -27,6 +28,13 @@ from .models import (
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _supports_for_update(session: Session) -> bool:
+    bind = session.get_bind()
+    if bind is None:
+        return False
+    return bind.dialect.name not in {"sqlite"}
 
 
 def _ensure_user(session: Session, user_id: str, name: str | None = None) -> AppUser:
@@ -115,6 +123,143 @@ def list_conversations(session: Session, user_id: str, limit: int = 50) -> list[
     return [serialize_conversation(conv, member.unread_count) for conv, member in rows]
 
 
+def serialize_conversation_member(member: ConversationMember) -> dict[str, Any]:
+    return {
+        "conversation_id": member.conversation_id,
+        "user_id": member.user_id,
+        "joined_at": member.joined_at.isoformat(),
+        "mute_flag": member.mute_flag,
+        "unread_count": member.unread_count,
+        "last_read_message_id": member.last_read_message_id,
+        "last_read_seq": member.last_read_seq,
+    }
+
+
+def is_conversation_member(session: Session, conversation_id: str, user_id: str) -> bool:
+    member = (
+        session.query(ConversationMember)
+        .filter(
+            ConversationMember.conversation_id == conversation_id,
+            ConversationMember.user_id == user_id,
+        )
+        .first()
+    )
+    return member is not None
+
+
+def list_conversation_members(
+    session: Session,
+    conversation_id: str,
+    requester_user_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if requester_user_id and not is_conversation_member(session, conversation_id, requester_user_id):
+        raise ValueError("Conversation member not found")
+
+    members = (
+        session.query(ConversationMember)
+        .filter(ConversationMember.conversation_id == conversation_id)
+        .order_by(ConversationMember.joined_at.asc())
+        .all()
+    )
+    return [serialize_conversation_member(member) for member in members]
+
+
+def add_conversation_members(
+    session: Session,
+    conversation_id: str,
+    operator_user_id: str,
+    member_ids: list[str],
+) -> list[dict[str, Any]]:
+    conversation = session.get(Conversation, conversation_id)
+    if not conversation:
+        raise ValueError("Conversation not found")
+
+    if not is_conversation_member(session, conversation_id, operator_user_id):
+        raise ValueError("Operator is not a conversation member")
+
+    existing_members = {
+        item.user_id
+        for item in session.query(ConversationMember)
+        .filter(ConversationMember.conversation_id == conversation_id)
+        .all()
+    }
+
+    added_members: list[str] = []
+    for member_id in member_ids:
+        normalized = (member_id or "").strip()
+        if not normalized or normalized in existing_members:
+            continue
+
+        _ensure_user(session, normalized)
+        member = ConversationMember(
+            conversation_id=conversation_id,
+            user_id=normalized,
+            unread_count=0,
+            last_read_seq=0,
+        )
+        session.add(member)
+        existing_members.add(normalized)
+        added_members.append(normalized)
+
+    if added_members:
+        session.add(
+            EventLog(
+                user_id=operator_user_id,
+                event_type="conversation_members_added",
+                target_id=conversation_id,
+                extra_json={"member_ids": added_members},
+            )
+        )
+
+    session.flush()
+    return list_conversation_members(session, conversation_id)
+
+
+def remove_conversation_member(
+    session: Session,
+    conversation_id: str,
+    operator_user_id: str,
+    member_user_id: str,
+) -> dict[str, Any]:
+    conversation = session.get(Conversation, conversation_id)
+    if not conversation:
+        raise ValueError("Conversation not found")
+
+    if not is_conversation_member(session, conversation_id, operator_user_id):
+        raise ValueError("Operator is not a conversation member")
+
+    if member_user_id == conversation.creator_id:
+        raise ValueError("Cannot remove conversation creator")
+
+    member = (
+        session.query(ConversationMember)
+        .filter(
+            ConversationMember.conversation_id == conversation_id,
+            ConversationMember.user_id == member_user_id,
+        )
+        .first()
+    )
+    if not member:
+        raise ValueError("Conversation member not found")
+
+    session.delete(member)
+    session.add(
+        EventLog(
+            user_id=operator_user_id,
+            event_type="conversation_member_removed",
+            target_id=conversation_id,
+            extra_json={"member_user_id": member_user_id},
+        )
+    )
+    session.flush()
+
+    return {
+        "conversation_id": conversation_id,
+        "member_user_id": member_user_id,
+        "removed": True,
+    }
+
+
 def _serialize_attachment(attachment: MessageAttachment) -> dict[str, Any]:
     return {
         "attachment_id": attachment.id,
@@ -148,9 +293,13 @@ def serialize_message(message: Message, attachments: list[MessageAttachment] | N
 def list_messages(
     session: Session,
     conversation_id: str,
+    requester_user_id: str | None = None,
     limit: int = 100,
     before_seq: int | None = None,
 ) -> list[dict[str, Any]]:
+    if requester_user_id and not is_conversation_member(session, conversation_id, requester_user_id):
+        raise ValueError("Conversation member not found")
+
     query = session.query(Message).filter(Message.conversation_id == conversation_id)
     if before_seq is not None:
         query = query.filter(Message.seq < before_seq)
@@ -187,78 +336,93 @@ def create_message(
     source_ref_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> tuple[Message, list[MessageAttachment]]:
-    conversation = session.get(Conversation, conversation_id)
-    if not conversation:
-        raise ValueError("Conversation not found")
-
     _ensure_user(session, sender_id)
+    for attempt in range(3):
+        try:
+            with session.begin_nested():
+                conversation_query = session.query(Conversation).filter(Conversation.id == conversation_id)
+                if _supports_for_update(session):
+                    conversation_query = conversation_query.with_for_update()
+                conversation = conversation_query.first()
+                if not conversation:
+                    raise ValueError("Conversation not found")
 
-    sender_member = (
-        session.query(ConversationMember)
-        .filter(
-            ConversationMember.conversation_id == conversation_id,
-            ConversationMember.user_id == sender_id,
-        )
-        .first()
-    )
-    if sender_member is None:
-        sender_member = ConversationMember(conversation_id=conversation_id, user_id=sender_id)
-        session.add(sender_member)
-        session.flush()
+                members_query = session.query(ConversationMember).filter(
+                    ConversationMember.conversation_id == conversation_id
+                )
+                if _supports_for_update(session):
+                    members_query = members_query.with_for_update()
+                members = members_query.all()
 
-    max_seq = session.query(func.max(Message.seq)).filter(Message.conversation_id == conversation_id).scalar() or 0
-    next_seq = int(max_seq) + 1
+                sender_member = next((item for item in members if item.user_id == sender_id), None)
+                if sender_member is None:
+                    raise ValueError("Sender is not a conversation member")
 
-    message = Message(
-        conversation_id=conversation_id,
-        seq=next_seq,
-        sender_id=sender_id,
-        message_type=message_type,
-        content=content,
-        reply_to_message_id=reply_to_message_id,
-        status=status,
-        source_type=source_type,
-        source_ref_id=source_ref_id,
-    )
-    session.add(message)
-    session.flush()
+                max_seq = (
+                    session.query(func.max(Message.seq))
+                    .filter(Message.conversation_id == conversation_id)
+                    .scalar()
+                    or 0
+                )
+                next_seq = int(max_seq) + 1
 
-    saved_attachments: list[MessageAttachment] = []
-    for item in attachments or []:
-        attachment = MessageAttachment(
-            message_id=message.id,
-            file_url=str(item.get("file_url") or ""),
-            file_name=item.get("file_name"),
-            file_size=item.get("file_size"),
-            mime_type=item.get("mime_type"),
-            object_key=item.get("object_key"),
-        )
-        session.add(attachment)
-        saved_attachments.append(attachment)
+                message = Message(
+                    conversation_id=conversation_id,
+                    seq=next_seq,
+                    sender_id=sender_id,
+                    message_type=message_type,
+                    content=content,
+                    reply_to_message_id=reply_to_message_id,
+                    status=status,
+                    source_type=source_type,
+                    source_ref_id=source_ref_id,
+                )
+                session.add(message)
+                session.flush()
 
-    conversation.last_message_id = message.id
-    conversation.last_message_time = message.created_at
-    conversation.updated_at = _utcnow()
+                saved_attachments: list[MessageAttachment] = []
+                for item in attachments or []:
+                    attachment = MessageAttachment(
+                        message_id=message.id,
+                        file_url=str(item.get("file_url") or ""),
+                        file_name=item.get("file_name"),
+                        file_size=item.get("file_size"),
+                        mime_type=item.get("mime_type"),
+                        object_key=item.get("object_key"),
+                    )
+                    session.add(attachment)
+                    saved_attachments.append(attachment)
 
-    members = session.query(ConversationMember).filter(ConversationMember.conversation_id == conversation_id).all()
-    for member in members:
-        if member.user_id == sender_id:
-            member.unread_count = 0
-            member.last_read_seq = max(member.last_read_seq, next_seq)
-            member.last_read_message_id = message.id
-        else:
-            member.unread_count += 1
+                conversation.last_message_id = message.id
+                conversation.last_message_time = message.created_at
+                conversation.updated_at = _utcnow()
 
-    session.add(
-        EventLog(
-            user_id=sender_id,
-            event_type="message_sent",
-            target_id=conversation_id,
-            extra_json={"message_id": message.id, "message_type": message_type, "source_type": source_type},
-        )
-    )
+                for member in members:
+                    if member.user_id == sender_id:
+                        member.unread_count = 0
+                        member.last_read_seq = max(member.last_read_seq, next_seq)
+                        member.last_read_message_id = message.id
+                    else:
+                        member.unread_count += 1
 
-    return message, saved_attachments
+                session.add(
+                    EventLog(
+                        user_id=sender_id,
+                        event_type="message_sent",
+                        target_id=conversation_id,
+                        extra_json={
+                            "message_id": message.id,
+                            "message_type": message_type,
+                            "source_type": source_type,
+                        },
+                    )
+                )
+            return message, saved_attachments
+        except IntegrityError:
+            if attempt >= 2:
+                raise
+            continue
+    raise RuntimeError("failed to create message")
 
 
 def mark_conversation_read(
@@ -267,14 +431,16 @@ def mark_conversation_read(
     user_id: str,
     last_read_seq: int | None,
 ) -> dict[str, Any]:
-    member = (
+    member_query = (
         session.query(ConversationMember)
         .filter(
             ConversationMember.conversation_id == conversation_id,
             ConversationMember.user_id == user_id,
         )
-        .first()
     )
+    if _supports_for_update(session):
+        member_query = member_query.with_for_update()
+    member = member_query.first()
     if member is None:
         raise ValueError("Conversation member not found")
 
@@ -445,20 +611,29 @@ def create_ai_message(
         if existing:
             return existing
 
-    message = AIChatMessage(
-        session_id=session_id,
-        role=role,
-        content=content,
-        content_type=content_type,
-        model_name=model_name,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=total_tokens,
-        latency_ms=latency_ms,
-        request_id=request_id,
-        parent_message_id=parent_message_id,
-    )
-    session.add(message)
+    try:
+        with session.begin_nested():
+            message = AIChatMessage(
+                session_id=session_id,
+                role=role,
+                content=content,
+                content_type=content_type,
+                model_name=model_name,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                latency_ms=latency_ms,
+                request_id=request_id,
+                parent_message_id=parent_message_id,
+            )
+            session.add(message)
+            session.flush()
+    except IntegrityError:
+        if request_id:
+            existing = session.query(AIChatMessage).filter(AIChatMessage.request_id == request_id).first()
+            if existing:
+                return existing
+        raise
 
     ai_session.updated_at = _utcnow()
 
@@ -471,7 +646,6 @@ def create_ai_message(
         )
     )
 
-    session.flush()
     return message
 
 
@@ -493,19 +667,36 @@ def upsert_ai_feedback(
         .first()
     )
 
-    if feedback is None:
-        feedback = AIMessageFeedback(
-            message_id=message_id,
-            user_id=user_id,
-            rating=rating,
-            feedback_text=feedback_text,
-        )
-        session.add(feedback)
-    else:
+    if feedback is not None:
         feedback.rating = rating
         feedback.feedback_text = feedback_text
+        session.flush()
+        return feedback
 
-    session.flush()
+    try:
+        with session.begin_nested():
+            feedback = AIMessageFeedback(
+                message_id=message_id,
+                user_id=user_id,
+                rating=rating,
+                feedback_text=feedback_text,
+            )
+            session.add(feedback)
+            session.flush()
+    except IntegrityError:
+        feedback = (
+            session.query(AIMessageFeedback)
+            .filter(
+                AIMessageFeedback.message_id == message_id,
+                AIMessageFeedback.user_id == user_id,
+            )
+            .first()
+        )
+        if feedback is None:
+            raise
+        feedback.rating = rating
+        feedback.feedback_text = feedback_text
+        session.flush()
     return feedback
 
 

@@ -16,11 +16,14 @@ _ENV_LOADED = False
 
 def _iter_candidate_files() -> list[Path]:
     base_dir = Path(__file__).resolve().parent
+    api_gateway_dir = base_dir / "api_gateway"
     openmaic_dir = base_dir.parent
     repo_root = openmaic_dir.parent
 
     # Higher-priority files come first because we only fill missing variables.
     return [
+        api_gateway_dir / ".env.local",
+        api_gateway_dir / ".env",
         openmaic_dir / ".env.local",
         openmaic_dir / ".env",
         repo_root / ".env.local",

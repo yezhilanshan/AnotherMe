@@ -30,7 +30,13 @@ media/videos/
 media/texts/
 OpenMAIC/anotherme2_engine/output/
 OpenMAIC/anotherme2_engine/output_problem*/
+OpenMAIC/anotherme2_engine/generated_outputs/
+OpenMAIC/anotherme2_engine/output_test/
 OpenMAIC/anotherme2_engine/media/videos/
 OpenMAIC/anotherme2_engine/gateway_data/
 OpenMAIC/anotherme2_engine/gateway.db
 OpenMAIC/anotherme2_engine/template/media/videos/
+OpenMAIC/anotherme2_engine/.copilot_review/
+OpenMAIC/anotherme2_engine/diff_output.txt
+OpenMAIC/anotherme2_engine/OpenMAIC/
+OpenMAIC/anotherme2_engine/.cache/

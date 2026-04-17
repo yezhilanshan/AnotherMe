@@ -1,15 +1,18 @@
 import { NextRequest } from 'next/server';
 import {
   createGatewayConversation,
-  DEFAULT_CHAT_USER_ID,
   isAnotherMe2GatewayError,
   listGatewayConversations,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveRequestUserId } from '@/lib/auth/request-user';
+import { AuthError } from '@/lib/auth/types';
+
+export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.nextUrl.searchParams.get('userId') || DEFAULT_CHAT_USER_ID;
+    const userId = await resolveRequestUserId(request, request.nextUrl.searchParams.get('userId'));
     const limit = Number(request.nextUrl.searchParams.get('limit') || '50');
     const conversations = await listGatewayConversations({
       userId,
@@ -17,6 +20,9 @@ export async function GET(request: NextRequest) {
     });
     return apiSuccess({ conversations });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }
@@ -38,7 +44,7 @@ export async function POST(request: NextRequest) {
       memberIds?: string[];
     };
 
-    const userId = (body.userId || DEFAULT_CHAT_USER_ID).trim();
+    const userId = await resolveRequestUserId(request, body.userId);
     const name = (body.name || '').trim();
     if (!name) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'name is required');
@@ -48,12 +54,15 @@ export async function POST(request: NextRequest) {
       userId,
       type: body.type || 'single',
       name,
-      creatorId: body.creatorId,
+      creatorId: userId,
       memberIds: body.memberIds,
     });
 
     return apiSuccess({ conversation }, 201);
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }

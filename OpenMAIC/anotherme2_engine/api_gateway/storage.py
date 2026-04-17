@@ -142,8 +142,17 @@ class S3ObjectStorage:
         try:
             self.client.head_object(Bucket=self.bucket, Key=object_key)
             return True
-        except Exception:
-            return False
+        except Exception as exc:
+            response = getattr(exc, "response", None) or {}
+            error = response.get("Error", {}) if isinstance(response, dict) else {}
+            code = str(error.get("Code") or "").strip().lower()
+            status_code = None
+            if isinstance(response, dict):
+                status_code = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+
+            if code in {"404", "nosuchkey", "notfound", "no such key"} or status_code == 404:
+                return False
+            raise
 
 
 def guess_content_type(filename: str) -> str:

@@ -17,6 +17,10 @@ import {
   testMiniMaxImageConnectivity,
 } from './adapters/minimax-image-adapter';
 import { generateWithGrokImage, testGrokImageConnectivity } from './adapters/grok-image-adapter';
+import {
+  generateWithLibLibImage,
+  testLibLibImageConnectivity,
+} from './adapters/liblib-image-adapter';
 
 export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
   seedream: {
@@ -93,6 +97,14 @@ export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageProviderConfig> = {
     ],
     supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
   },
+  'liblib-image': {
+    id: 'liblib-image',
+    name: 'LibLib Image',
+    requiresApiKey: true,
+    defaultBaseUrl: 'https://openapi.liblib.ai',
+    models: [{ id: 'default', name: 'Default (Auto Model)' }],
+    supportedAspectRatios: ['16:9', '4:3', '1:1', '9:16'],
+  },
 };
 
 export async function testImageConnectivity(
@@ -109,6 +121,8 @@ export async function testImageConnectivity(
       return testMiniMaxImageConnectivity(config);
     case 'grok-image':
       return testGrokImageConnectivity(config);
+    case 'liblib-image':
+      return testLibLibImageConnectivity(config);
     default:
       return {
         success: false,
@@ -132,6 +146,8 @@ export async function generateImage(
       return generateWithMiniMaxImage(config, options);
     case 'grok-image':
       return generateWithGrokImage(config, options);
+    case 'liblib-image':
+      return generateWithLibLibImage(config, options);
     default:
       throw new Error(`Unsupported image provider: ${config.providerId}`);
   }

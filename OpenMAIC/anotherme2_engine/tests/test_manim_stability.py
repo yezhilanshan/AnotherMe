@@ -24,7 +24,9 @@ from agents.codegen import TemplateCodeGenerator
 from agents.error_classifier import classify_render_error
 from agents.formal_video_validator import FormalVideoValidator
 from agents.animation_agent import AnimationAgent
+from agents.animation_planner import AnimationPlanner
 from agents.merge_agent import MergeAgent
+from agents.script_agent import ScriptAgent
 from agents.state import ScriptStep, VideoProject
 from agents.template_retriever import TemplateRetriever
 
@@ -182,6 +184,117 @@ class _CountingGenerator(TemplateCodeGenerator):
 
 
 class ManimStabilityTests(unittest.TestCase):
+    def test_script_agent_visible_segments_skips_unit_tokens(self) -> None:
+        agent = ScriptAgent(config={}, llm=None)
+
+        segments = agent._normalize_visible_segments(
+            value=[],
+            narration="已知 AB = 3 cm, BC = 4 cm。",
+            visual_cues=[],
+            title="长度关系",
+        )
+
+        self.assertIn("AB", segments)
+        self.assertIn("BC", segments)
+        self.assertNotIn("CM", segments)
+
+        explicit_segments = agent._normalize_visible_segments(
+            value=["CM", "AB"],
+            narration="",
+            visual_cues=[],
+            title="",
+        )
+        self.assertIn("CM", explicit_segments)
+
+    def test_animation_planner_prioritizes_spoken_formulas(self) -> None:
+        planner = AnimationPlanner()
+        step = ScriptStep(
+            id=1,
+            title="公式讲解",
+            duration=2.0,
+            narration="由已知可得 AB=BC。",
+            visual_cues=["高亮 AB"],
+            spoken_formulas=["AB = BC", "AB \\parallel CD"],
+            on_screen_texts=[{"text": "观察关系", "kind": "description", "target_area": "formula_area"}],
+            audio_duration=2.0,
+        )
+        step_scene = {"operations": [], "focus_entities": []}
+
+        plan = planner.plan_step(step, step_scene, time_offset=0.0)
+        self.assertIn("AB = BC", plan["formula_items"])
+        self.assertIn("AB \\parallel CD", plan["formula_items"])
+
+    def test_prepare_animation_context_generates_fold_movement_from_coordinate_scene(self) -> None:
+        agent = AnimationAgent(
+            config={
+                "canvas_config": _canvas_config(),
+            },
+            llm=None,
+        )
+        coordinate_scene = {
+            "mode": "2d",
+            "points": [
+                {"id": "A", "coord": [0.0, 0.0]},
+                {"id": "B", "coord": [2.0, 0.5]},
+                {"id": "D", "coord": [0.0, 2.0]},
+                {"id": "E", "coord": [1.0, 1.0]},
+                {
+                    "id": "B1",
+                    "derived": {"type": "reflect_point", "source": "B", "axis": ["D", "E"]},
+                },
+            ],
+            "primitives": [
+                {"id": "seg_AB", "type": "segment", "points": ["A", "B"]},
+                {"id": "seg_DE", "type": "segment", "points": ["D", "E"]},
+            ],
+            "constraints": [],
+            "display": {},
+            "measurements": [],
+        }
+        steps = [
+            ScriptStep(
+                id=1,
+                title="观察图形",
+                duration=2.0,
+                narration="先观察已知图形。",
+                visual_cues=["高亮 DE"],
+                audio_duration=2.0,
+            ),
+            ScriptStep(
+                id=2,
+                title="执行折叠",
+                duration=2.0,
+                narration="沿 DE 折叠得到像点。",
+                visual_cues=["折叠"],
+                audio_duration=2.0,
+            ),
+        ]
+        teaching_ir = {
+            "steps": [
+                {"step_id": 1, "focus_targets": ["seg_DE"], "actions": [{"action": "highlight_fold_axis", "axis": "seg_DE"}]},
+                {
+                    "step_id": 2,
+                    "focus_targets": ["seg_DE", "B1"],
+                    "actions": [{"action": "animate_fold", "axis": "seg_DE", "targets": ["B1"]}],
+                },
+            ]
+        }
+
+        contexts = agent._prepare_animation_context(
+            steps,
+            coordinate_scene,
+            teaching_ir=teaching_ir,
+        )
+        agent._attach_animation_specs(
+            contexts,
+            base_coordinate_scene=coordinate_scene,
+            conservative=False,
+        )
+
+        movement_actions = contexts[1]["animation_spec"]["movement_actions"]
+        moved_points = {item.get("point_id") for item in movement_actions}
+        self.assertIn("B1", moved_points)
+
     def test_template_retriever_prefers_tangent_component_templates(self) -> None:
         retriever = TemplateRetriever(
             template_dir=Path(__file__).resolve().parents[1] / "template" / "manim_templates"

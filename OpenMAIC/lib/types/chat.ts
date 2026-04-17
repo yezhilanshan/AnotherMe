@@ -248,6 +248,8 @@ export interface StatelessChatRequest {
   config: {
     agentIds: string[];
     sessionType?: 'qa' | 'discussion';
+    /** Extra system instruction appended to the selected agent prompt (request-scoped). */
+    systemPromptAddendum?: string;
     /** Discussion topic (for agent-initiated discussions) */
     discussionTopic?: string;
     /** Discussion prompt (for agent-initiated discussions) */

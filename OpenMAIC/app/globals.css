@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
+@import 'katex/dist/katex.min.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -666,4 +667,17 @@
   .workspace-hero-card {
     padding: 0.85rem;
   }
+}
+
+.ai-tutor-markdown {
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.ai-tutor-markdown h1,
+.ai-tutor-markdown h2,
+.ai-tutor-markdown h3 {
+  margin-top: 0.75rem;
+  margin-bottom: 0.4rem;
+  font-weight: 700;
 }

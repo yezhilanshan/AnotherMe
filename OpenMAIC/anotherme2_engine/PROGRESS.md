@@ -23,8 +23,8 @@ problem.png
     │  ┌─────────────────────────────────────────────────────┐
     │  │ Layer 1: SceneGraphUpdater   每步提取焦点实体 + 操作  │
     │  │ Layer 2: AnimationPlanner    生成结构化动画计划       │
-    │  │ Layer 3: CanvasScene         公式区布局管理（防重叠）  │
-    │  │ Layer 4: Template Codegen    结构化生成 + LLM 回退      │
+    │  │ Layer 3: CanvasScene         公式区布局管理（防重叠） │
+    │  │ Layer 4: Template Codegen    结构化生成 + LLM 回退   │
     │  └─────────────────────────────────────────────────────┘
     ▼
 [RepairAgent]        → 规则修复常见 Manim 语法/运行时错误

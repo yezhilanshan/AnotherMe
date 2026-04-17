@@ -27,6 +27,10 @@ class RepairAgent(BaseAgent):
 
     def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """修复生成的 Manim 代码中的常见错误"""
+        project = state.get("project")
+        if project is not None and getattr(project, "status", "") == "failed":
+            return state
+
         manim_code = state.get("metadata", {}).get("manim_code", "")
         if not manim_code:
             state["messages"].append({

@@ -74,6 +74,11 @@ next-env.d.ts
 /data
 /logs
 /anotherme2_engine/generated_outputs/
+/anotherme2_engine/output_test/
+/anotherme2_engine/.copilot_review/
+/anotherme2_engine/diff_output.txt
+/anotherme2_engine/OpenMAIC/
+/anotherme2_engine/.cache/
 /anotherme2_engine/output/
 /anotherme2_engine/output_problem*/
 /anotherme2_engine/media/videos/

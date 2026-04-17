@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict
 
 import httpx
@@ -17,6 +17,20 @@ class OpenMAICError(RuntimeError):
 class OpenMAICClient:
     base_url: str
     timeout_seconds: int = 30
+    _client: httpx.Client | None = field(default=None, init=False, repr=False)
+
+    def _get_client(self) -> httpx.Client:
+        if self._client is None:
+            self._client = httpx.Client(
+                timeout=self.timeout_seconds,
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            )
+        return self._client
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
     def _unwrap(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if "data" in payload and isinstance(payload["data"], dict):
@@ -26,15 +40,15 @@ class OpenMAICClient:
         return payload
 
     def _post(self, path: str, json_body: Dict[str, Any]) -> Dict[str, Any]:
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.post(f"{self.base_url.rstrip('/')}{path}", json=json_body)
+        client = self._get_client()
+        response = client.post(f"{self.base_url.rstrip('/')}{path}", json=json_body)
         if response.status_code >= 400:
             raise OpenMAICError(f"OpenMAIC POST {path} failed: {response.status_code} {response.text}")
         return self._unwrap(response.json())
 
     def _get(self, path: str) -> Dict[str, Any]:
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.get(f"{self.base_url.rstrip('/')}{path}")
+        client = self._get_client()
+        response = client.get(f"{self.base_url.rstrip('/')}{path}")
         if response.status_code >= 400:
             raise OpenMAICError(f"OpenMAIC GET {path} failed: {response.status_code} {response.text}")
         return self._unwrap(response.json())

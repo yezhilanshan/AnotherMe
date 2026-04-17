@@ -6,15 +6,18 @@ import hashlib
 import json
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, Protocol
 from uuid import uuid4
 
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .anotherme_executor import (
+    MissingInputObjectError,
     build_requirement_from_photo,
     extract_core_example_text,
     run_problem_video_job,
@@ -24,12 +27,21 @@ from .chat_service import extract_learning_records
 from .config import Settings
 from .models import Job, JobArtifact, JobEvent
 from .openmaic_client import OpenMAICClient, OpenMAICError
-from .queueing import QueueMessage, RedisQueueClient
+from .queueing import QueueMessage
 from .schemas import CreateJobRequest, JobStatus, JobType, validate_job_payload
 from .storage import ObjectStorage
 
 
 RUNNING_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
+RETRY_NOT_BEFORE_KEY = "retry_not_before"
+
+
+class QueueClientLike(Protocol):
+    def enqueue(self, queue_name: str, message: QueueMessage) -> None:
+        ...
+
+    def push_dead_letter(self, dlq_name: str, message: QueueMessage) -> None:
+        ...
 
 
 class JobServiceError(RuntimeError):
@@ -38,6 +50,46 @@ class JobServiceError(RuntimeError):
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(tz=None).replace(tzinfo=None)
+    return parsed
+
+
+def _get_retry_not_before(job: Job) -> datetime | None:
+    state = job.engine_state or {}
+    return _parse_iso_datetime(state.get(RETRY_NOT_BEFORE_KEY))
+
+
+def _clear_retry_schedule(job: Job) -> None:
+    state = dict(job.engine_state or {})
+    if RETRY_NOT_BEFORE_KEY in state:
+        state.pop(RETRY_NOT_BEFORE_KEY, None)
+        job.engine_state = state
+
+
+def is_job_ready_for_execution(job: Job, now: datetime | None = None) -> bool:
+    target = _get_retry_not_before(job)
+    if not target:
+        return True
+    return (now or _utcnow()) >= target
 
 
 def canonical_json(data: Dict[str, Any]) -> str:
@@ -96,7 +148,6 @@ def serialize_job(job: Job) -> Dict[str, Any]:
 
 def create_or_get_job(
     session: Session,
-    queue_client: RedisQueueClient,
     request: CreateJobRequest,
     settings: Settings,
 ) -> tuple[Job, bool]:
@@ -127,31 +178,315 @@ def create_or_get_job(
         engine_state={},
     )
     session.add(job)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        existing = (
+            session.query(Job)
+            .filter(Job.idempotency_key == idem_key)
+            .order_by(Job.created_at.desc())
+            .first()
+        )
+        if existing:
+            return existing, False
+        raise
 
     add_event(session, job.id, "queued", "Job accepted and queued", {"queue": queue_name})
-    queue_client.enqueue(queue_name, QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=queue_name))
     return job, True
 
 
-def dequeue_next_queued_job(session: Session, queue_names: list[str]) -> QueueMessage | None:
+def dequeue_next_queued_job(
+    session: Session,
+    queue_names: list[str],
+    *,
+    scan_limit_per_queue: int = 100,
+) -> QueueMessage | None:
+    now = _utcnow()
     for queue_name in queue_names:
-        job = (
+        jobs = (
             session.query(Job)
             .filter(Job.queue_name == queue_name, Job.status == JobStatus.QUEUED.value)
             .order_by(Job.created_at.asc())
-            .first()
+            .limit(max(1, scan_limit_per_queue))
+            .all()
         )
-        if not job:
+        if not jobs:
             continue
-        return QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name)
+        for job in jobs:
+            if is_job_ready_for_execution(job, now):
+                return QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name)
     return None
+
+
+def recover_stale_running_jobs(
+    session: Session,
+    queue_client: QueueClientLike,
+    queue_names: Iterable[str],
+    *,
+    stale_seconds: int,
+    max_recoveries: int,
+) -> int:
+    if stale_seconds <= 0 or max_recoveries <= 0:
+        return 0
+
+    queue_name_list = [name for name in queue_names if str(name or "").strip()]
+    if not queue_name_list:
+        return 0
+
+    cutoff = _utcnow() - timedelta(seconds=stale_seconds)
+    stale_jobs = (
+        session.query(Job)
+        .filter(
+            Job.status == JobStatus.RUNNING.value,
+            Job.queue_name.in_(queue_name_list),
+            Job.updated_at < cutoff,
+        )
+        .order_by(Job.updated_at.asc())
+        .limit(max_recoveries)
+        .all()
+    )
+
+    recovered = 0
+    for job in stale_jobs:
+        job.attempt_count += 1
+        stale_message = (
+            "Detected stale running job and reclaimed it for retry "
+            f"(step={job.step}, stale_seconds={stale_seconds}, "
+            f"attempt={job.attempt_count}/{job.max_retries})."
+        )
+
+        if job.attempt_count > job.max_retries:
+            _mark_failed(session, job, "JOB_STALE_TIMEOUT", stale_message)
+            continue
+
+        job.status = JobStatus.QUEUED.value
+        job.step = "queued"
+        job.error_code = "RECOVERED_STALE_RUNNING"
+        job.error_message = stale_message
+        job.updated_at = _utcnow()
+        add_event(
+            session,
+            job.id,
+            "recovered",
+            stale_message,
+            {
+                "reason": "stale_running",
+                "stale_seconds": stale_seconds,
+                "attempt": job.attempt_count,
+            },
+        )
+        queue_client.enqueue(
+            job.queue_name,
+            QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name),
+        )
+        recovered += 1
+
+    return recovered
+
+
+def fail_jobs_with_missing_input_objects(
+    session: Session,
+    storage: ObjectStorage,
+    queue_names: Iterable[str],
+    *,
+    max_failures: int,
+) -> int:
+    if max_failures <= 0:
+        return 0
+
+    queue_name_list = [name for name in queue_names if str(name or "").strip()]
+    if not queue_name_list:
+        return 0
+
+    scan_limit = max(max_failures * 4, max_failures)
+    candidates = (
+        session.query(Job)
+        .filter(
+            Job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value,
+            Job.queue_name.in_(queue_name_list),
+            Job.status == JobStatus.QUEUED.value,
+        )
+        .order_by(Job.updated_at.asc())
+        .limit(scan_limit)
+        .all()
+    )
+
+    failed = 0
+    for job in candidates:
+        if failed >= max_failures:
+            break
+
+        normalized_payload = job.normalized_payload or {}
+        input_payload = job.input_payload or {}
+        image_object_key = (
+            str(normalized_payload.get("image_object_key") or input_payload.get("image_object_key") or "")
+            .strip()
+        )
+        if not image_object_key:
+            _mark_failed(session, job, "JOB_INPUT_MISSING", "Missing required field: image_object_key")
+            failed += 1
+            continue
+
+        try:
+            exists = storage.exists(image_object_key)
+        except Exception as exc:
+            add_event(
+                session,
+                job.id,
+                "input_check_skipped",
+                "Skipped input object existence check due to storage error",
+                {"image_object_key": image_object_key, "error": str(exc)},
+            )
+            continue
+
+        if exists:
+            geometry_object_key = str(normalized_payload.get("geometry_file") or input_payload.get("geometry_file") or "").strip()
+            if not geometry_object_key:
+                continue
+            try:
+                geometry_exists = storage.exists(geometry_object_key)
+            except Exception as exc:
+                add_event(
+                    session,
+                    job.id,
+                    "input_check_skipped",
+                    "Skipped geometry object existence check due to storage error",
+                    {"geometry_file": geometry_object_key, "error": str(exc)},
+                )
+                continue
+
+            if geometry_exists:
+                continue
+
+            _mark_failed(session, job, "JOB_INPUT_MISSING", f"Input geometry object missing in storage: {geometry_object_key}")
+            failed += 1
+            continue
+
+        _mark_failed(session, job, "JOB_INPUT_MISSING", f"Input object missing in storage: {image_object_key}")
+        failed += 1
+
+    return failed
+
+
+def _reconcile_running_problem_video_job(session: Session, job: Job) -> bool:
+    if job.job_type != JobType.PROBLEM_VIDEO_GENERATE.value or job.status != JobStatus.RUNNING.value:
+        return False
+
+    video_artifact = (
+        session.query(JobArtifact)
+        .filter(JobArtifact.job_id == job.id, JobArtifact.artifact_type == "problem_video")
+        .order_by(JobArtifact.id.desc())
+        .first()
+    )
+    if not video_artifact:
+        return False
+
+    debug_artifact = (
+        session.query(JobArtifact)
+        .filter(JobArtifact.job_id == job.id, JobArtifact.artifact_type == "debug_bundle")
+        .order_by(JobArtifact.id.desc())
+        .first()
+    )
+
+    engine_state = job.engine_state or {}
+    result_payload = {
+        "video_url": video_artifact.url,
+        "duration_sec": engine_state.get("duration_sec"),
+        "script_steps_count": engine_state.get("script_steps_count"),
+        "debug_bundle_url": (
+            debug_artifact.url if debug_artifact else engine_state.get("debug_bundle_url")
+        ),
+    }
+    add_event(
+        session,
+        job.id,
+        "reconciled",
+        "Recovered succeeded status from uploaded artifacts after interrupted worker execution",
+        {
+            "artifact_type": "problem_video",
+            "video_url": video_artifact.url,
+        },
+    )
+    _mark_succeeded(session, job, result_payload)
+    return True
+
+
+def reconcile_running_problem_video_jobs_with_artifacts(
+    session: Session,
+    queue_names: Iterable[str],
+    *,
+    max_reconciliations: int,
+) -> int:
+    if max_reconciliations <= 0:
+        return 0
+
+    queue_name_list = [name for name in queue_names if str(name or "").strip()]
+    if not queue_name_list:
+        return 0
+
+    candidates = (
+        session.query(Job)
+        .filter(
+            Job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value,
+            Job.status == JobStatus.RUNNING.value,
+            Job.queue_name.in_(queue_name_list),
+        )
+        .order_by(Job.updated_at.asc())
+        .limit(max_reconciliations)
+        .all()
+    )
+
+    reconciled = 0
+    for job in candidates:
+        if _reconcile_running_problem_video_job(session, job):
+            reconciled += 1
+
+    return reconciled
+
+
+def reconcile_single_running_problem_video_job_with_artifacts(session: Session, job: Job) -> bool:
+    return _reconcile_running_problem_video_job(session, job)
+
+
+def purge_prestart_nonterminal_jobs(
+    session: Session,
+    *,
+    max_purge: int,
+) -> int:
+    if max_purge <= 0:
+        return 0
+
+    cutoff = _utcnow()
+    candidates = (
+        session.query(Job)
+        .filter(
+            Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+            Job.created_at < cutoff,
+        )
+        .order_by(Job.created_at.asc())
+        .limit(max_purge)
+        .all()
+    )
+
+    purged = 0
+    for job in candidates:
+        _mark_failed(
+            session,
+            job,
+            "JOB_PURGED_ON_RESTART",
+            "Job was purged on service startup to clear pre-restart pending queue.",
+        )
+        purged += 1
+
+    return purged
 
 
 def _mark_running(session: Session, job: Job, step: str, message: str, progress: int) -> None:
     now = _utcnow()
     if not job.started_at:
         job.started_at = now
+    _clear_retry_schedule(job)
     job.updated_at = now
     job.status = JobStatus.RUNNING.value
     job.step = step
@@ -160,6 +495,7 @@ def _mark_running(session: Session, job: Job, step: str, message: str, progress:
 
 
 def _mark_failed(session: Session, job: Job, error_code: str, message: str) -> None:
+    _clear_retry_schedule(job)
     job.status = JobStatus.FAILED.value
     job.error_code = error_code
     job.error_message = message
@@ -170,13 +506,40 @@ def _mark_failed(session: Session, job: Job, error_code: str, message: str) -> N
 
 
 def _mark_succeeded(session: Session, job: Job, result_payload: Dict[str, Any]) -> None:
+    _clear_retry_schedule(job)
     job.status = JobStatus.SUCCEEDED.value
     job.progress = 100
     job.step = "completed"
+    job.error_code = None
+    job.error_message = None
     job.result_payload = result_payload
     job.completed_at = _utcnow()
     job.updated_at = _utcnow()
     add_event(session, job.id, "succeeded", "Job completed", {"result": result_payload})
+
+
+def _is_non_retriable_execution_error(job: Job, exc: Exception) -> bool:
+    if job.job_type != JobType.PROBLEM_VIDEO_GENERATE.value:
+        return False
+    return isinstance(exc, MissingInputObjectError)
+
+
+def _try_claim_queued_job(session: Session, job_id: str) -> bool:
+    now = _utcnow()
+    claimed = session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == JobStatus.QUEUED.value)
+        .values(
+            status=JobStatus.RUNNING.value,
+            step="worker_claimed",
+            updated_at=now,
+            started_at=now,
+            error_code=None,
+            error_message=None,
+        )
+    )
+    session.flush()
+    return (claimed.rowcount or 0) == 1
 
 
 def _run_course_generate(
@@ -186,48 +549,50 @@ def _run_course_generate(
     settings: Settings,
 ) -> Dict[str, Any]:
     client = OpenMAICClient(settings.openmaic_base_url)
-
-    _mark_running(session, job, "submitting_openmaic", "Submitting course generation to OpenMAIC", 5)
-    session.commit()
-
-    submitted = client.submit_course_job(payload)
-    openmaic_job_id = submitted.get("jobId") or submitted.get("job_id")
-    if not openmaic_job_id:
-        raise OpenMAICError(f"OpenMAIC submit response missing jobId: {submitted}")
-
-    job.engine_state = {**(job.engine_state or {}), "openmaic_job_id": openmaic_job_id}
-    add_event(session, job.id, "engine_state", "OpenMAIC job submitted", {"openmaic_job_id": openmaic_job_id})
-    session.commit()
-
-    start = time.time()
-    while True:
-        poll = client.poll_course_job(openmaic_job_id)
-        status = str(poll.get("status") or "").lower()
-        progress = int(poll.get("progress") or 0)
-        step = str(poll.get("step") or "polling")
-        message = str(poll.get("message") or "Polling OpenMAIC job")
-
-        _mark_running(session, job, step, message, progress)
+    try:
+        _mark_running(session, job, "submitting_openmaic", "Submitting course generation to OpenMAIC", 5)
         session.commit()
 
-        done = bool(poll.get("done")) or status in {"succeeded", "failed"}
-        if done:
-            if status == "succeeded":
-                result = poll.get("result") or {}
-                classroom_id = result.get("classroomId") or result.get("classroom_id")
-                classroom_url = result.get("url") or result.get("classroom_url")
-                scenes_count = int(result.get("scenesCount") or result.get("scenes_count") or 0)
-                return {
-                    "classroom_id": classroom_id,
-                    "classroom_url": classroom_url,
-                    "scenes_count": scenes_count,
-                }
-            raise OpenMAICError(poll.get("error") or "OpenMAIC job failed")
+        submitted = client.submit_course_job(payload)
+        openmaic_job_id = submitted.get("jobId") or submitted.get("job_id")
+        if not openmaic_job_id:
+            raise OpenMAICError(f"OpenMAIC submit response missing jobId: {submitted}")
 
-        if (time.time() - start) > settings.openmaic_timeout_seconds:
-            raise OpenMAICError(f"OpenMAIC polling timeout ({settings.openmaic_timeout_seconds}s)")
+        job.engine_state = {**(job.engine_state or {}), "openmaic_job_id": openmaic_job_id}
+        add_event(session, job.id, "engine_state", "OpenMAIC job submitted", {"openmaic_job_id": openmaic_job_id})
+        session.commit()
 
-        time.sleep(max(settings.openmaic_poll_seconds, 1))
+        start = time.time()
+        while True:
+            poll = client.poll_course_job(openmaic_job_id)
+            status = str(poll.get("status") or "").lower()
+            progress = int(poll.get("progress") or 0)
+            step = str(poll.get("step") or "polling")
+            message = str(poll.get("message") or "Polling OpenMAIC job")
+
+            _mark_running(session, job, step, message, progress)
+            session.commit()
+
+            done = bool(poll.get("done")) or status in {"succeeded", "failed"}
+            if done:
+                if status == "succeeded":
+                    result = poll.get("result") or {}
+                    classroom_id = result.get("classroomId") or result.get("classroom_id")
+                    classroom_url = result.get("url") or result.get("classroom_url")
+                    scenes_count = int(result.get("scenesCount") or result.get("scenes_count") or 0)
+                    return {
+                        "classroom_id": classroom_id,
+                        "classroom_url": classroom_url,
+                        "scenes_count": scenes_count,
+                    }
+                raise OpenMAICError(poll.get("error") or "OpenMAIC job failed")
+
+            if (time.time() - start) > settings.openmaic_timeout_seconds:
+                raise OpenMAICError(f"OpenMAIC polling timeout ({settings.openmaic_timeout_seconds}s)")
+
+            time.sleep(max(settings.openmaic_poll_seconds, 1))
+    finally:
+        client.close()
 
 
 def _run_problem_video_generate(
@@ -248,7 +613,13 @@ def _run_problem_video_generate(
     _mark_running(session, job, "running_anotherme2", "Running AnotherMe2 video pipeline", 10)
     session.commit()
 
-    exec_result = run_problem_video_job(payload, storage=storage, temp_root=settings.worker_temp_root)
+    exec_result = run_problem_video_job(
+        payload,
+        storage=storage,
+        temp_root=settings.worker_temp_root,
+        output_root=settings.worker_output_root,
+        keep_run_output=settings.keep_run_output,
+    )
     run_output_dir = _resolve_run_output_dir(exec_result.video_path)
 
     _mark_running(session, job, "uploading_artifacts", "Uploading generated artifacts", 80)
@@ -265,7 +636,14 @@ def _run_problem_video_generate(
             debug_url = storage.upload_file(exec_result.debug_bundle_path, debug_key, content_type="application/zip")
             add_artifact(session, job.id, "debug_bundle", debug_key, debug_url)
 
-        job.engine_state = {**(job.engine_state or {}), "requirement_hint": exec_result.requirement_hint}
+        job.engine_state = {
+            **(job.engine_state or {}),
+            "requirement_hint": exec_result.requirement_hint,
+            "duration_sec": exec_result.duration_sec,
+            "script_steps_count": exec_result.script_steps_count,
+            "debug_bundle_url": debug_url,
+            "run_output_dir": str(run_output_dir) if run_output_dir else None,
+        }
         session.commit()
 
         return {
@@ -275,8 +653,8 @@ def _run_problem_video_generate(
             "debug_bundle_url": debug_url,
         }
     finally:
-        # Keep historical behavior of not accumulating local worker artifacts forever.
-        if run_output_dir and run_output_dir.exists():
+        # Optional cleanup: preserve run_output when keep_run_output is enabled.
+        if (not settings.keep_run_output) and run_output_dir and run_output_dir.exists():
             run_root = run_output_dir.parent
             shutil.rmtree(run_output_dir, ignore_errors=True)
             try:
@@ -495,40 +873,60 @@ def execute_job(session: Session, job: Job, settings: Settings, storage: ObjectS
 
 def handle_worker_message(
     session: Session,
-    queue_client: RedisQueueClient,
+    queue_client: QueueClientLike,
     message: QueueMessage,
     settings: Settings,
     storage: ObjectStorage,
 ) -> None:
+    now = _utcnow()
     job = session.get(Job, message.job_id)
     if not job:
         return
-    if job.status == JobStatus.SUCCEEDED.value:
+    if job.status != JobStatus.QUEUED.value:
+        return
+    if not is_job_ready_for_execution(job, now):
+        return
+    if not _try_claim_queued_job(session, message.job_id):
+        return
+    session.commit()
+
+    job = session.get(Job, message.job_id)
+    if not job:
         return
 
     try:
         result = execute_job(session, job, settings, storage)
         _mark_succeeded(session, job, result)
     except Exception as exc:
+        if _is_non_retriable_execution_error(job, exc):
+            _mark_failed(session, job, "JOB_INPUT_MISSING", str(exc))
+            return
+
         job.attempt_count += 1
         error_message = str(exc)
         if job.attempt_count <= job.max_retries:
             job.status = JobStatus.QUEUED.value
-            job.step = "retrying"
-            job.error_code = "RETRYING"
+            job.step = "retry_waiting"
+            job.error_code = "RETRY_SCHEDULED"
             job.error_message = error_message
-            job.updated_at = _utcnow()
             delay = settings.retry_base_seconds * (2 ** (job.attempt_count - 1))
+            retry_not_before = _utcnow() + timedelta(seconds=delay)
+            state = dict(job.engine_state or {})
+            state[RETRY_NOT_BEFORE_KEY] = retry_not_before.isoformat()
+            job.engine_state = state
+            job.updated_at = _utcnow()
             add_event(
                 session,
                 job.id,
                 "retry",
                 f"Job failed; retrying in {delay}s",
-                {"attempt": job.attempt_count, "error": error_message},
+                {
+                    "attempt": job.attempt_count,
+                    "error": error_message,
+                    "retry_not_before": retry_not_before.isoformat(),
+                },
             )
             session.commit()
-            time.sleep(delay)
-            queue_client.enqueue(job.queue_name, QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name))
         else:
             _mark_failed(session, job, "JOB_EXECUTION_FAILED", error_message)
             dlq_name = settings.dlq_mapping.get(job.queue_name, f"{settings.queue_dead_letter_prefix}.{job.queue_name}")

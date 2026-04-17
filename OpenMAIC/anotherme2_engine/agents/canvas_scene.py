@@ -22,9 +22,20 @@ class CanvasElement:
 class FormulaLayoutManager:
     """管理右侧公式区布局，避免公式互相覆盖。"""
 
-    def __init__(self, formula_area: List[float], vertical_gap: float = 0.03):
+    def __init__(self, formula_area: List[float], vertical_gap: float = 0.02, max_slots: int = 8):
         self.formula_area = formula_area
         self.vertical_gap = vertical_gap
+        self.max_slots = max(1, int(max_slots))
+
+    def _slot_box(self, slot_index: int) -> List[float]:
+        left, top, right, bottom = self.formula_area
+        slot_index = max(0, min(slot_index, self.max_slots - 1))
+        total_height = max(bottom - top, 0.24)
+        total_gap = self.vertical_gap * (self.max_slots - 1)
+        slot_height = max((total_height - total_gap) / self.max_slots, 0.06)
+        slot_top = top + slot_index * (slot_height + self.vertical_gap)
+        slot_bottom = min(slot_top + slot_height, bottom)
+        return [left, slot_top, right, slot_bottom]
 
     def place_formula(
         self,
@@ -32,16 +43,10 @@ class FormulaLayoutManager:
         element_id: str,
         content: str,
         preferred_height: float = 0.08,
+        slot_index: int = 0,
     ) -> CanvasElement:
-        left, top, right, bottom = self.formula_area
-        used_bottom = top
-        formula_elements = [e for e in existing_elements if e.area == "formula" and e.visible]
-        if formula_elements:
-            used_bottom = max(e.y + e.height for e in formula_elements) + self.vertical_gap
-
-        height = min(preferred_height, max(bottom - used_bottom, 0.06))
-        if used_bottom + height > bottom:
-            raise ValueError("公式区空间不足，请清空旧公式或减少显示内容")
+        left, slot_top, right, slot_bottom = self._slot_box(slot_index)
+        height = min(preferred_height, max(slot_bottom - slot_top, 0.06))
 
         return CanvasElement(
             id=element_id,
@@ -49,21 +54,27 @@ class FormulaLayoutManager:
             content=content,
             area="formula",
             x=left,
-            y=used_bottom,
+            y=slot_top,
             width=right - left,
             height=height,
-            order=len(formula_elements),
+            order=slot_index,
         )
 
 
 class CanvasScene:
     """用于几何区/公式区布局管理，并输出稳定布局快照。"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        max_formula_slots: int = 8,
+        geometry_area: Optional[List[float]] = None,
+        formula_area: Optional[List[float]] = None,
+    ):
         self.elements: Dict[str, CanvasElement] = {}
-        self.geometry_area = [0.02, 0.05, 0.58, 0.95]
-        self.formula_area = [0.66, 0.08, 0.96, 0.92]
-        self.formula_layout = FormulaLayoutManager(self.formula_area)
+        # 左侧题图区稍微缩小，放在左侧中间；右侧公式区加宽以承载更多公式。
+        self.geometry_area = geometry_area or [0.02, 0.08, 0.56, 0.92]
+        self.formula_area = formula_area or [0.60, 0.08, 0.96, 0.92]
+        self.formula_layout = FormulaLayoutManager(self.formula_area, max_slots=max_formula_slots)
 
     def add_element(self, element: CanvasElement) -> None:
         self.elements[element.id] = element
@@ -81,12 +92,14 @@ class CanvasScene:
         element_id: str,
         content: str,
         preferred_height: float = 0.08,
+        slot_index: int = 0,
     ) -> CanvasElement:
         element = self.formula_layout.place_formula(
             existing_elements=list(self.elements.values()),
             element_id=element_id,
             content=content,
             preferred_height=preferred_height,
+            slot_index=slot_index,
         )
         self.add_element(element)
         return element
@@ -97,28 +110,38 @@ class CanvasScene:
         formula_items: List[str],
         reset_formula_area: bool = False,
     ) -> List[CanvasElement]:
-        """为每个步骤预留公式区块，避免后续更新公式时位置变化导致的视觉跳动。"""
+        """为每个步骤预留固定槽位，并替换旧公式避免重叠累积。"""
+        # 每个步骤都按固定槽位重建右侧公式区，保证“新公式上来即替换旧公式”。
         if reset_formula_area:
             self.clear_formula_elements()
 
         elements: List[CanvasElement] = []
-        for index, item in enumerate(formula_items, start=1):
+        slot_count = self.formula_layout.max_slots
+        for index, item in enumerate(formula_items[:slot_count], start=1):
             safe_item = item.strip() or f"step_{step_id}_formula_{index}"
-            element_id = f"step_{step_id}_formula_{index}"
-            elements.append(self.reserve_formula_block(element_id, safe_item))
+            element_id = f"formula_slot_{index}"
+            element = self.formula_layout.place_formula(
+                existing_elements=list(self.elements.values()),
+                element_id=element_id,
+                content=safe_item,
+                slot_index=index - 1,
+            )
+            self.add_element(element)
+            elements.append(element)
         return elements
 
     def get_layout_snapshot(self) -> Dict[str, object]:
         """返回当前布局快照，供动画渲染使用。"""
+        sorted_elements = sorted(self.elements.values(), key=lambda e: (e.area, e.order, e.id))
         return {
             "geometry_area": self.geometry_area,
             "formula_area": self.formula_area,
-            "elements": [asdict(element) for element in self.elements.values()],
+            "elements": [asdict(element) for element in sorted_elements],
         }
 
     def get_formula_snapshot(self) -> List[Dict[str, object]]:
-        return [
-            asdict(element)
-            for element in self.elements.values()
-            if element.area == "formula"
-        ]
+        sorted_formulas = sorted(
+            (e for e in self.elements.values() if e.area == "formula"),
+            key=lambda e: (e.order, e.id),
+        )
+        return [asdict(element) for element in sorted_formulas]

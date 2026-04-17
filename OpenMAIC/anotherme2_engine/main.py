@@ -16,6 +16,7 @@ from agents.config import (
     TEXT_API_KEY_ENV_NAME,
     VISION_API_KEY_ENV_NAME,
     build_default_llm_config,
+    build_ocr_model_config,
     build_vision_model_config,
 )
 from agents.state import AgentState, VideoProject
@@ -33,9 +34,11 @@ class MathVideoGenerator:
         self,
         llm_config: Optional[Dict[str, Any]] = None,
         vision_config: Optional[Dict[str, Any]] = None,
+        ocr_vision_config: Optional[Dict[str, Any]] = None,
     ):
         self.llm_config = llm_config or build_default_llm_config()
         self.vision_config = vision_config or build_vision_model_config()
+        self.ocr_vision_config = ocr_vision_config or build_ocr_model_config()
         self.workflow = None
 
     def generate(
@@ -49,6 +52,7 @@ class MathVideoGenerator:
         self.workflow = create_default_workflow(
             llm_config=self.llm_config,
             vision_llm_config=self.vision_config,
+            ocr_llm_config=self.ocr_vision_config,
             output_dir=output_dir,
             export_ggb=export_ggb,
         )
@@ -196,6 +200,7 @@ def main():
     generator = MathVideoGenerator(
         llm_config=build_default_llm_config(),
         vision_config=build_vision_model_config(),
+        ocr_vision_config=build_ocr_model_config(),
     )
 
     result = generator.generate(

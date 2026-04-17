@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Upload, Sparkles, Settings2, ArrowRight, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { useSettingsStore } from '@/lib/store/settings';
 
 interface ParsePdfSuccess {
   success: true;
@@ -63,7 +64,16 @@ export default function CreateClassPage() {
     };
   }, []);
 
-  const parsePdfIfNeeded = async (file: File | null, signal: AbortSignal) => {
+  const pdfProviderId = useSettingsStore((s) => s.pdfProviderId);
+  const pdfProvidersConfig = useSettingsStore((s) => s.pdfProvidersConfig);
+
+  const parsePdfIfNeeded = async (
+    file: File | null,
+    signal: AbortSignal,
+    providerId?: string,
+    apiKey?: string,
+    baseUrl?: string,
+  ) => {
     if (!file) return undefined;
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
@@ -73,6 +83,15 @@ export default function CreateClassPage() {
 
     const formData = new FormData();
     formData.append('pdf', file);
+    if (providerId) {
+      formData.append('providerId', providerId);
+    }
+    if (apiKey?.trim()) {
+      formData.append('apiKey', apiKey.trim());
+    }
+    if (baseUrl?.trim()) {
+      formData.append('baseUrl', baseUrl.trim());
+    }
 
     const response = await fetch('/api/parse-pdf', {
       method: 'POST',
@@ -120,7 +139,14 @@ export default function CreateClassPage() {
         : trimmedTopic;
 
       setStatusText('正在处理学习资料...');
-      const pdfContent = await parsePdfIfNeeded(materialFile, controller.signal);
+      const activePdfConfig = pdfProvidersConfig?.[pdfProviderId];
+      const pdfContent = await parsePdfIfNeeded(
+        materialFile,
+        controller.signal,
+        pdfProviderId,
+        activePdfConfig?.apiKey,
+        activePdfConfig?.baseUrl,
+      );
 
       const createResp = await fetch('/api/generate-classroom', {
         method: 'POST',

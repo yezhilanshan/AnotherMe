@@ -178,6 +178,7 @@ class CoordinateSceneCompiler:
             display,
             point_order,
         )
+        self._ensure_segment_source_tags(primitives=primitives, display=display)
 
         templates = self._ordered_unique(
             [
@@ -224,6 +225,29 @@ class CoordinateSceneCompiler:
             "measurements": measurements,
             "display": display,
         }
+
+    def _ensure_segment_source_tags(
+        self,
+        *,
+        primitives: Sequence[Dict[str, Any]],
+        display: Dict[str, Any],
+    ) -> None:
+        primitive_display = display.setdefault("primitives", {}) if isinstance(display, dict) else {}
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                continue
+            if str(primitive.get("type", "")).strip().lower() != "segment":
+                continue
+            primitive_id = str(primitive.get("id", "")).strip()
+            if not primitive_id:
+                continue
+            payload = primitive_display.setdefault(primitive_id, {})
+            source = str(payload.get("source", "")).strip().lower()
+            if source:
+                continue
+            role = str(payload.get("role", "")).strip().lower()
+            style = str(payload.get("style", "")).strip().lower()
+            payload["source"] = "approved_auxiliary" if role == "construction" or style == "dashed" else "given"
 
     def _repair_raw_geometry_spec(self, raw: Dict[str, Any]) -> Dict[str, Any]:
         primitives: List[Dict[str, Any]] = []
@@ -568,6 +592,7 @@ class CoordinateSceneCompiler:
             payload = display.setdefault("primitives", {}).setdefault(segment_id, {})
             payload.setdefault("style", "solid")
             payload["role"] = "primary_edge"
+            payload.setdefault("source", "derived")
 
         if not any(
             str(item.get("type", "")).strip().lower() == "point_in_polygon"
@@ -583,6 +608,7 @@ class CoordinateSceneCompiler:
                 payload = display.setdefault("primitives", {}).setdefault(segment_id, {})
                 payload.setdefault("style", "solid")
                 payload.setdefault("role", "interior_link")
+                payload.setdefault("source", "derived")
 
         triangle_edge_pairs = {frozenset(edge) for edge in triangle_edges}
         for point_id, neighbors in all_neighbors.items():
@@ -626,6 +652,7 @@ class CoordinateSceneCompiler:
                     continue
                 payload["style"] = "dashed"
                 payload["role"] = "construction"
+                payload["source"] = "derived"
             constraints = [
                 item
                 for item in constraints
@@ -786,6 +813,19 @@ class CoordinateSceneCompiler:
         role = str(payload.get("role", "")).strip().lower()
         return style == "dashed" or role == "construction"
 
+    def _segment_source(self, primitive_id: str, primitive_display: Dict[str, Any]) -> str:
+        payload = primitive_display.get(primitive_id)
+        if not isinstance(payload, dict):
+            return ""
+        source = str(payload.get("source", "")).strip().lower()
+        if source:
+            return source
+        role = str(payload.get("role", "")).strip().lower()
+        style = str(payload.get("style", "")).strip().lower()
+        if role == "construction" or style == "dashed":
+            return "approved_auxiliary"
+        return "given"
+
     def _combinations_of_three(self, items: Sequence[str]) -> List[Tuple[str, str, str]]:
         combos: List[Tuple[str, str, str]] = []
         for i in range(len(items)):
@@ -810,14 +850,16 @@ class CoordinateSceneCompiler:
         ) or ["generic_triangle"]
         solver_trace: List[str] = []
         last_error: Optional[str] = None
+        solver_spec = dict(normalized_spec)
+        solver_spec["_solver_indexes"] = self._build_solver_indexes(normalized_spec)
 
         for template in templates:
             try:
-                coords = self._solve_template(normalized_spec, template, solver_trace)
-                self._resolve_dependent_points(normalized_spec, coords, solver_trace)
+                coords = self._solve_template(solver_spec, template, solver_trace)
+                self._resolve_dependent_points(solver_spec, coords, solver_trace)
                 points = []
                 unresolved: List[str] = []
-                for point in normalized_spec.get("points", []):
+                for point in solver_spec.get("points", []):
                     point_id = str(point.get("id", "")).strip()
                     payload: Dict[str, Any] = {"id": point_id}
                     if "derived" in point and point["derived"]:
@@ -1063,6 +1105,7 @@ class CoordinateSceneCompiler:
         point_display = display.get("points", {}) or {}
         primitive_display = display.get("primitives", {}) or {}
         point_lookup = self._point_lookup(coordinate_scene)
+        allowed_segment_sources = {"given", "approved_auxiliary"}
 
         for point in coordinate_scene.get("points", []):
             point_id = str(point.get("id", "")).strip()
@@ -1076,6 +1119,11 @@ class CoordinateSceneCompiler:
             primitive_type = str(primitive.get("type", "")).lower()
             refs = [str(item) for item in (primitive.get("points") or [])]
             if primitive_type == "segment" and len(refs) == 2:
+                source = self._segment_source(primitive_id, primitive_display)
+                if source and source not in allowed_segment_sources:
+                    continue
+                if self._is_construction_segment(primitive_id, display) and source != "approved_auxiliary":
+                    continue
                 commands.append(f"{primitive_id} = Segment({refs[0]}, {refs[1]})")
             elif primitive_type == "polygon" and len(refs) >= 3:
                 commands.append(f"{primitive_id} = Polygon({', '.join(refs)})")
@@ -1925,37 +1973,33 @@ class CoordinateSceneCompiler:
             for item in spec.get("primitives", [])
             if isinstance(item, dict) and item.get("id")
         }
+        indexes = self._build_solver_indexes(spec, primitive_map=primitive_map)
         circular_points = self._ordered_unique(
-            [
-                str(item.get("entities", [None])[0])
-                for item in spec.get("constraints", [])
-                if str(item.get("type", "")).lower() == "point_on_circle"
-                and len(item.get("entities") or []) == 2
-            ]
+            self._point_on_circle_targets(spec, indexes=indexes)
         )
         circle_angle_state = {pid: index for index, pid in enumerate(circular_points)}
 
         for _ in range(len(spec.get("points", [])) + 3):
             progress = False
-            for point_id in self._midpoint_targets(spec):
+            for point_id in self._midpoint_targets(spec, indexes=indexes):
                 if point_id in coords:
                     continue
-                endpoints = self._midpoint_endpoints(point_id, spec, primitive_map)
+                endpoints = self._midpoint_endpoints(point_id, spec, primitive_map, indexes=indexes)
                 if endpoints and endpoints[0] in coords and endpoints[1] in coords:
                     coords[point_id] = self._midpoint(coords[endpoints[0]], coords[endpoints[1]])
                     solver_trace.append(f"resolved midpoint {point_id}")
                     progress = True
 
-            for point_id in self._point_on_segment_targets(spec):
+            for point_id in self._point_on_segment_targets(spec, indexes=indexes):
                 if point_id in coords:
                     continue
-                position = self._solve_point_on_segment(point_id, spec, coords, primitive_map)
+                position = self._solve_point_on_segment(point_id, spec, coords, primitive_map, indexes=indexes)
                 if position is not None:
                     coords[point_id] = position
                     solver_trace.append(f"resolved point_on_segment {point_id}")
                     progress = True
 
-            for point_id in self._point_on_circle_targets(spec):
+            for point_id in self._point_on_circle_targets(spec, indexes=indexes):
                 if point_id in coords:
                     continue
                 position = self._solve_point_on_circle(
@@ -1964,25 +2008,26 @@ class CoordinateSceneCompiler:
                     coords,
                     primitive_map,
                     circle_angle_state,
+                    indexes=indexes,
                 )
                 if position is not None:
                     coords[point_id] = position
                     solver_trace.append(f"resolved point_on_circle {point_id}")
                     progress = True
 
-            for point_id in self._point_in_polygon_targets(spec):
+            for point_id in self._point_in_polygon_targets(spec, indexes=indexes):
                 if point_id in coords:
                     continue
-                position = self._solve_point_in_polygon(point_id, spec, coords, primitive_map)
+                position = self._solve_point_in_polygon(point_id, spec, coords, primitive_map, indexes=indexes)
                 if position is not None:
                     coords[point_id] = position
                     solver_trace.append(f"resolved point_in_polygon {point_id}")
                     progress = True
 
-            for point_id in self._point_outside_polygon_targets(spec):
+            for point_id in self._point_outside_polygon_targets(spec, indexes=indexes):
                 if point_id in coords:
                     continue
-                position = self._solve_point_outside_polygon(point_id, spec, coords, primitive_map)
+                position = self._solve_point_outside_polygon(point_id, spec, coords, primitive_map, indexes=indexes)
                 if position is not None:
                     coords[point_id] = position
                     solver_trace.append(f"resolved point_outside_polygon {point_id}")
@@ -1992,16 +2037,16 @@ class CoordinateSceneCompiler:
                 point_id = str(point.get("id", "")).strip()
                 if not point_id or point_id in coords:
                     continue
-                position = self._solve_parallel_endpoint(point_id, spec, coords, primitive_map)
+                position = self._solve_parallel_endpoint(point_id, spec, coords, primitive_map, indexes=indexes)
                 if position is not None:
                     coords[point_id] = position
                     solver_trace.append(f"resolved parallel endpoint {point_id}")
                     progress = True
 
-            for point_id in self._intersection_targets(spec):
+            for point_id in self._intersection_targets(spec, indexes=indexes):
                 if point_id in coords:
                     continue
-                position = self._solve_intersection_point(point_id, spec, coords, primitive_map)
+                position = self._solve_intersection_point(point_id, spec, coords, primitive_map, indexes=indexes)
                 if position is not None:
                     coords[point_id] = position
                     solver_trace.append(f"resolved intersection {point_id}")
@@ -2012,7 +2057,7 @@ class CoordinateSceneCompiler:
 
         unresolved_segment_points = [
             point_id
-            for point_id in self._point_on_segment_targets(spec)
+            for point_id in self._point_on_segment_targets(spec, indexes=indexes)
             if point_id not in coords
         ]
         if unresolved_segment_points:
@@ -2023,7 +2068,7 @@ class CoordinateSceneCompiler:
 
         unresolved_outside_points = [
             point_id
-            for point_id in self._point_outside_polygon_targets(spec)
+            for point_id in self._point_outside_polygon_targets(spec, indexes=indexes)
             if point_id not in coords
         ]
         if unresolved_outside_points:
@@ -2454,6 +2499,96 @@ class CoordinateSceneCompiler:
             ordered.append(value)
         return ordered
 
+    def _build_solver_indexes(
+        self,
+        spec: Dict[str, Any],
+        primitive_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        primitive_map = primitive_map or {
+            str(item.get("id", "")).strip(): item
+            for item in spec.get("primitives", [])
+            if isinstance(item, dict) and item.get("id")
+        }
+
+        neighbors: Dict[str, set[str]] = {}
+        for primitive in primitive_map.values():
+            if str(primitive.get("type", "")).strip().lower() != "segment":
+                continue
+            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            if len(refs) != 2:
+                continue
+            first, second = refs
+            neighbors.setdefault(first, set()).add(second)
+            neighbors.setdefault(second, set()).add(first)
+
+        constraint_targets: Dict[str, List[str]] = {}
+        midpoint_segments_by_point: Dict[str, str] = {}
+        point_on_segment_by_point: Dict[str, str] = {}
+        point_on_circle_by_point: Dict[str, str] = {}
+        point_in_polygon_by_point: Dict[str, str] = {}
+        point_outside_polygon_by_point: Dict[str, str] = {}
+        intersection_segments_by_point: Dict[str, Tuple[str, str]] = {}
+        parallel_segment_pairs: List[Tuple[str, str]] = []
+
+        for relation in spec.get("constraints", []):
+            if not isinstance(relation, dict):
+                continue
+            relation_type = str(relation.get("type", "")).strip().lower()
+            entities = [str(item).strip() for item in (relation.get("entities") or []) if str(item).strip()]
+            if not relation_type:
+                continue
+            if entities:
+                constraint_targets.setdefault(relation_type, []).append(entities[0])
+            if relation_type == "midpoint" and len(entities) == 2:
+                midpoint_segments_by_point[entities[0]] = entities[1]
+            elif relation_type == "point_on_segment" and len(entities) == 2:
+                point_on_segment_by_point[entities[0]] = entities[1]
+            elif relation_type == "point_on_circle" and len(entities) == 2:
+                point_on_circle_by_point[entities[0]] = entities[1]
+            elif relation_type == "point_in_polygon" and len(entities) == 2:
+                point_in_polygon_by_point[entities[0]] = entities[1]
+            elif relation_type == "point_outside_polygon" and len(entities) == 2:
+                point_outside_polygon_by_point[entities[0]] = entities[1]
+            elif relation_type == "intersect" and len(entities) == 3:
+                intersection_segments_by_point[entities[0]] = (entities[1], entities[2])
+            elif relation_type == "parallel" and len(entities) == 2:
+                parallel_segment_pairs.append((entities[0], entities[1]))
+
+        for relation_type, targets in list(constraint_targets.items()):
+            constraint_targets[relation_type] = self._ordered_unique(targets)
+
+        length_index: Dict[frozenset[str], float] = {}
+        length_measurements_by_point: Dict[str, List[Tuple[str, float]]] = {}
+        for measurement in spec.get("measurements", []):
+            if str(measurement.get("type", "")).strip().lower() != "length":
+                continue
+            entities = [str(item).strip() for item in (measurement.get("entities") or []) if str(item).strip()]
+            if len(entities) != 2:
+                continue
+            value = self._coerce_float(measurement.get("value"), default=None)
+            if value is None:
+                continue
+            first, second = entities
+            pair = frozenset((first, second))
+            length_index.setdefault(pair, value)
+            length_measurements_by_point.setdefault(first, []).append((second, value))
+            length_measurements_by_point.setdefault(second, []).append((first, value))
+
+        return {
+            "primitive_map": primitive_map,
+            "neighbors": neighbors,
+            "constraint_targets": constraint_targets,
+            "midpoint_segments_by_point": midpoint_segments_by_point,
+            "point_on_segment_by_point": point_on_segment_by_point,
+            "point_on_circle_by_point": point_on_circle_by_point,
+            "point_in_polygon_by_point": point_in_polygon_by_point,
+            "point_outside_polygon_by_point": point_outside_polygon_by_point,
+            "intersection_segments_by_point": intersection_segments_by_point,
+            "parallel_segment_pairs": parallel_segment_pairs,
+            "length_index": length_index,
+            "length_measurements_by_point": length_measurements_by_point,
+        }
+
     def _explicit_coord_map(self, spec: Dict[str, Any]) -> Dict[str, List[float]]:
         coords: Dict[str, List[float]] = {}
         for point in spec.get("points", []):
@@ -2503,7 +2638,18 @@ class CoordinateSceneCompiler:
             edges.append((start, refs[(index + 1) % len(refs)]))
         return edges
 
-    def _point_neighbors_from_primitives(self, spec: Dict[str, Any], point_id: str) -> set[str]:
+    def _point_neighbors_from_primitives(
+        self,
+        spec: Dict[str, Any],
+        point_id: str,
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> set[str]:
+        if isinstance(indexes, dict):
+            indexed_neighbors = indexes.get("neighbors") or {}
+            if isinstance(indexed_neighbors, dict):
+                values = indexed_neighbors.get(point_id)
+                if isinstance(values, set):
+                    return set(values)
         neighbors: set[str] = set()
         for primitive in spec.get("primitives", []):
             if str(primitive.get("type", "")).strip().lower() != "segment":
@@ -2682,7 +2828,22 @@ class CoordinateSceneCompiler:
                 return radius
         return 3.0
 
-    def _find_length_between(self, spec: Dict[str, Any], a: str, b: str) -> Optional[float]:
+    def _find_length_between(
+        self,
+        spec: Dict[str, Any],
+        a: str,
+        b: str,
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> Optional[float]:
+        if indexes is None:
+            maybe_indexes = spec.get("_solver_indexes") if isinstance(spec, dict) else None
+            if isinstance(maybe_indexes, dict):
+                indexes = maybe_indexes
+        if isinstance(indexes, dict):
+            pair = frozenset((a, b))
+            indexed_value = (indexes.get("length_index") or {}).get(pair)
+            if indexed_value is not None:
+                return float(indexed_value)
         pair = {a, b}
         for measurement in spec.get("measurements", []):
             if str(measurement.get("type", "")).lower() != "length":
@@ -2691,6 +2852,40 @@ class CoordinateSceneCompiler:
             if len(entities) == 2 and set(entities) == pair:
                 return self._coerce_float(measurement.get("value"), default=None)
         return None
+
+    def _constraint_targets(
+        self,
+        spec: Dict[str, Any],
+        relation_type: str,
+        expected_len: Optional[int] = None,
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        if isinstance(indexes, dict):
+            if relation_type == "midpoint":
+                return list((indexes.get("midpoint_segments_by_point") or {}).keys())
+            if relation_type == "point_on_segment":
+                return list((indexes.get("point_on_segment_by_point") or {}).keys())
+            if relation_type == "point_on_circle":
+                return list((indexes.get("point_on_circle_by_point") or {}).keys())
+            if relation_type == "point_in_polygon":
+                return list((indexes.get("point_in_polygon_by_point") or {}).keys())
+            if relation_type == "point_outside_polygon":
+                return list((indexes.get("point_outside_polygon_by_point") or {}).keys())
+            if relation_type == "intersect":
+                return list((indexes.get("intersection_segments_by_point") or {}).keys())
+            targets = (indexes.get("constraint_targets") or {}).get(relation_type)
+            if isinstance(targets, list):
+                return list(targets)
+        return [
+            str(item.get("entities", [None])[0])
+            for item in spec.get("constraints", [])
+            if str(item.get("type", "")).lower() == relation_type
+            and (
+                len(item.get("entities") or []) >= 2
+                if expected_len is None
+                else len(item.get("entities") or []) == expected_len
+            )
+        ]
 
     def _find_tangent_for_vertex(
         self,
@@ -2745,10 +2940,20 @@ class CoordinateSceneCompiler:
             return _parse_numeric_token(trailing_numeric.group(1))
         return None
 
-    def _midpoint_targets(self, spec: Dict[str, Any]) -> List[str]:
-        return [str(item.get("entities", [None])[0]) for item in spec.get("constraints", []) if str(item.get("type", "")).lower() == "midpoint" and len(item.get("entities") or []) >= 2]
+    def _midpoint_targets(self, spec: Dict[str, Any], indexes: Optional[Dict[str, Any]] = None) -> List[str]:
+        return self._constraint_targets(spec, "midpoint", indexes=indexes)
 
-    def _midpoint_endpoints(self, point_id: str, spec: Dict[str, Any], primitive_map: Dict[str, Dict[str, Any]]) -> Optional[Tuple[str, str]]:
+    def _midpoint_endpoints(
+        self,
+        point_id: str,
+        spec: Dict[str, Any],
+        primitive_map: Dict[str, Dict[str, Any]],
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Tuple[str, str]]:
+        if isinstance(indexes, dict):
+            segment_id = (indexes.get("midpoint_segments_by_point") or {}).get(point_id)
+            if segment_id:
+                return self._segment_endpoints(segment_id, {}, primitive_map)
         for relation in spec.get("constraints", []):
             if str(relation.get("type", "")).lower() != "midpoint":
                 continue
@@ -2757,41 +2962,51 @@ class CoordinateSceneCompiler:
                 return self._segment_endpoints(entities[1], {}, primitive_map)
         return None
 
-    def _point_on_segment_targets(self, spec: Dict[str, Any]) -> List[str]:
-        return [str(item.get("entities", [None])[0]) for item in spec.get("constraints", []) if str(item.get("type", "")).lower() == "point_on_segment" and len(item.get("entities") or []) == 2]
+    def _point_on_segment_targets(self, spec: Dict[str, Any], indexes: Optional[Dict[str, Any]] = None) -> List[str]:
+        return self._constraint_targets(spec, "point_on_segment", expected_len=2, indexes=indexes)
 
-    def _point_on_circle_targets(self, spec: Dict[str, Any]) -> List[str]:
-        return [str(item.get("entities", [None])[0]) for item in spec.get("constraints", []) if str(item.get("type", "")).lower() == "point_on_circle" and len(item.get("entities") or []) == 2]
+    def _point_on_circle_targets(self, spec: Dict[str, Any], indexes: Optional[Dict[str, Any]] = None) -> List[str]:
+        return self._constraint_targets(spec, "point_on_circle", expected_len=2, indexes=indexes)
 
-    def _point_in_polygon_targets(self, spec: Dict[str, Any]) -> List[str]:
-        return [str(item.get("entities", [None])[0]) for item in spec.get("constraints", []) if str(item.get("type", "")).lower() == "point_in_polygon" and len(item.get("entities") or []) == 2]
+    def _point_in_polygon_targets(self, spec: Dict[str, Any], indexes: Optional[Dict[str, Any]] = None) -> List[str]:
+        return self._constraint_targets(spec, "point_in_polygon", expected_len=2, indexes=indexes)
 
-    def _point_outside_polygon_targets(self, spec: Dict[str, Any]) -> List[str]:
-        return [str(item.get("entities", [None])[0]) for item in spec.get("constraints", []) if str(item.get("type", "")).lower() == "point_outside_polygon" and len(item.get("entities") or []) == 2]
+    def _point_outside_polygon_targets(self, spec: Dict[str, Any], indexes: Optional[Dict[str, Any]] = None) -> List[str]:
+        return self._constraint_targets(spec, "point_outside_polygon", expected_len=2, indexes=indexes)
 
-    def _intersection_targets(self, spec: Dict[str, Any]) -> List[str]:
-        return [str(item.get("entities", [None])[0]) for item in spec.get("constraints", []) if str(item.get("type", "")).lower() == "intersect" and len(item.get("entities") or []) == 3]
+    def _intersection_targets(self, spec: Dict[str, Any], indexes: Optional[Dict[str, Any]] = None) -> List[str]:
+        return self._constraint_targets(spec, "intersect", expected_len=3, indexes=indexes)
 
-    def _solve_point_on_segment(self, point_id: str, spec: Dict[str, Any], coords: Dict[str, List[float]], primitive_map: Dict[str, Dict[str, Any]]) -> Optional[List[float]]:
+    def _solve_point_on_segment(
+        self,
+        point_id: str,
+        spec: Dict[str, Any],
+        coords: Dict[str, List[float]],
+        primitive_map: Dict[str, Dict[str, Any]],
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> Optional[List[float]]:
         segment_id = None
-        for relation in spec.get("constraints", []):
-            if str(relation.get("type", "")).lower() == "point_on_segment":
-                entities = [str(item) for item in (relation.get("entities") or [])]
-                if len(entities) == 2 and entities[0] == point_id:
-                    segment_id = entities[1]
-                    break
+        if isinstance(indexes, dict):
+            segment_id = (indexes.get("point_on_segment_by_point") or {}).get(point_id)
+        if not segment_id:
+            for relation in spec.get("constraints", []):
+                if str(relation.get("type", "")).lower() == "point_on_segment":
+                    entities = [str(item) for item in (relation.get("entities") or [])]
+                    if len(entities) == 2 and entities[0] == point_id:
+                        segment_id = entities[1]
+                        break
         if not segment_id:
             return None
         endpoints = self._segment_endpoints(segment_id, coords, primitive_map)
         if not endpoints or endpoints[0] not in coords or endpoints[1] not in coords:
             return None
         a, b = endpoints
-        midpoint_targets = set(self._midpoint_targets(spec))
+        midpoint_targets = set(self._midpoint_targets(spec, indexes=indexes))
         if point_id in midpoint_targets:
             return self._midpoint(coords[a], coords[b])
-        total = self._find_length_between(spec, a, b)
-        from_a = self._find_length_between(spec, a, point_id)
-        from_b = self._find_length_between(spec, b, point_id)
+        total = self._find_length_between(spec, a, b, indexes=indexes)
+        from_a = self._find_length_between(spec, a, point_id, indexes=indexes)
+        from_b = self._find_length_between(spec, b, point_id, indexes=indexes)
         if total and from_a is not None:
             return self._lerp(coords[a], coords[b], from_a / total)
         if total and from_b is not None:
@@ -2946,14 +3161,18 @@ class CoordinateSceneCompiler:
         coords: Dict[str, List[float]],
         primitive_map: Dict[str, Dict[str, Any]],
         circle_angle_state: Dict[str, int],
+        indexes: Optional[Dict[str, Any]] = None,
     ) -> Optional[List[float]]:
         circle_id = None
-        for relation in spec.get("constraints", []):
-            if str(relation.get("type", "")).lower() == "point_on_circle":
-                entities = [str(item) for item in (relation.get("entities") or [])]
-                if len(entities) == 2 and entities[0] == point_id:
-                    circle_id = entities[1]
-                    break
+        if isinstance(indexes, dict):
+            circle_id = (indexes.get("point_on_circle_by_point") or {}).get(point_id)
+        if not circle_id:
+            for relation in spec.get("constraints", []):
+                if str(relation.get("type", "")).lower() == "point_on_circle":
+                    entities = [str(item) for item in (relation.get("entities") or [])]
+                    if len(entities) == 2 and entities[0] == point_id:
+                        circle_id = entities[1]
+                        break
         if not circle_id:
             return None
         circle = primitive_map.get(circle_id)
@@ -2965,17 +3184,26 @@ class CoordinateSceneCompiler:
             return None
         center_coord = coords[center]
         radius = self._distance(center_coord, coords[radius_point])
-        for measurement in spec.get("measurements", []):
-            if str(measurement.get("type", "")).lower() != "length":
-                continue
-            entities = [str(item) for item in (measurement.get("entities") or [])]
-            if len(entities) != 2 or point_id not in entities:
-                continue
-            other_point = entities[0] if entities[1] == point_id else entities[1]
+        indexed_lengths = None
+        if isinstance(indexes, dict):
+            indexed_lengths = (indexes.get("length_measurements_by_point") or {}).get(point_id)
+
+        if indexed_lengths is None:
+            indexed_lengths = []
+            for measurement in spec.get("measurements", []):
+                if str(measurement.get("type", "")).lower() != "length":
+                    continue
+                entities = [str(item) for item in (measurement.get("entities") or [])]
+                if len(entities) != 2 or point_id not in entities:
+                    continue
+                other_point = entities[0] if entities[1] == point_id else entities[1]
+                chord_length = self._coerce_float(measurement.get("value"), default=None)
+                if chord_length is None:
+                    continue
+                indexed_lengths.append((other_point, chord_length))
+
+        for other_point, chord_length in indexed_lengths:
             if other_point not in coords:
-                continue
-            chord_length = self._coerce_float(measurement.get("value"), default=None)
-            if chord_length is None:
                 continue
             intersections = self._circle_circle_intersections(
                 center_coord,
@@ -2996,15 +3224,19 @@ class CoordinateSceneCompiler:
         spec: Dict[str, Any],
         coords: Dict[str, List[float]],
         primitive_map: Dict[str, Dict[str, Any]],
+        indexes: Optional[Dict[str, Any]] = None,
     ) -> Optional[List[float]]:
         polygon_id = None
-        for relation in spec.get("constraints", []):
-            if str(relation.get("type", "")).lower() != "point_in_polygon":
-                continue
-            entities = [str(item) for item in (relation.get("entities") or [])]
-            if len(entities) == 2 and entities[0] == point_id:
-                polygon_id = entities[1]
-                break
+        if isinstance(indexes, dict):
+            polygon_id = (indexes.get("point_in_polygon_by_point") or {}).get(point_id)
+        if not polygon_id:
+            for relation in spec.get("constraints", []):
+                if str(relation.get("type", "")).lower() != "point_in_polygon":
+                    continue
+                entities = [str(item) for item in (relation.get("entities") or [])]
+                if len(entities) == 2 and entities[0] == point_id:
+                    polygon_id = entities[1]
+                    break
         if not polygon_id:
             return None
         polygon = primitive_map.get(polygon_id)
@@ -3031,15 +3263,19 @@ class CoordinateSceneCompiler:
         spec: Dict[str, Any],
         coords: Dict[str, List[float]],
         primitive_map: Dict[str, Dict[str, Any]],
+        indexes: Optional[Dict[str, Any]] = None,
     ) -> Optional[List[float]]:
         polygon_id = None
-        for relation in spec.get("constraints", []):
-            if str(relation.get("type", "")).lower() != "point_outside_polygon":
-                continue
-            entities = [str(item) for item in (relation.get("entities") or [])]
-            if len(entities) == 2 and entities[0] == point_id:
-                polygon_id = entities[1]
-                break
+        if isinstance(indexes, dict):
+            polygon_id = (indexes.get("point_outside_polygon_by_point") or {}).get(point_id)
+        if not polygon_id:
+            for relation in spec.get("constraints", []):
+                if str(relation.get("type", "")).lower() != "point_outside_polygon":
+                    continue
+                entities = [str(item) for item in (relation.get("entities") or [])]
+                if len(entities) == 2 and entities[0] == point_id:
+                    polygon_id = entities[1]
+                    break
         if not polygon_id:
             return None
         polygon = primitive_map.get(polygon_id)
@@ -3056,7 +3292,7 @@ class CoordinateSceneCompiler:
 
         best_edge: Optional[Tuple[str, str]] = None
         best_score = -1
-        point_neighbors = self._point_neighbors_from_primitives(spec, point_id)
+        point_neighbors = self._point_neighbors_from_primitives(spec, point_id, indexes=indexes)
         for first, second in self._polygon_edges(refs):
             score = int(first in point_neighbors) + int(second in point_neighbors)
             if score > best_score:
@@ -3084,15 +3320,31 @@ class CoordinateSceneCompiler:
             round(edge_midpoint[1] + outward[1] / outward_norm * (distance * 1.6), 6),
         ]
 
-    def _solve_intersection_point(self, point_id: str, spec: Dict[str, Any], coords: Dict[str, List[float]], primitive_map: Dict[str, Dict[str, Any]]) -> Optional[List[float]]:
-        for relation in spec.get("constraints", []):
-            if str(relation.get("type", "")).lower() != "intersect":
-                continue
-            entities = [str(item) for item in (relation.get("entities") or [])]
-            if len(entities) != 3 or entities[0] != point_id:
-                continue
-            seg1 = self._segment_endpoints(entities[1], coords, primitive_map)
-            seg2 = self._segment_endpoints(entities[2], coords, primitive_map)
+    def _solve_intersection_point(
+        self,
+        point_id: str,
+        spec: Dict[str, Any],
+        coords: Dict[str, List[float]],
+        primitive_map: Dict[str, Dict[str, Any]],
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> Optional[List[float]]:
+        candidates: List[Tuple[str, str]] = []
+        if isinstance(indexes, dict):
+            pair = (indexes.get("intersection_segments_by_point") or {}).get(point_id)
+            if isinstance(pair, tuple) and len(pair) == 2:
+                candidates.append(pair)
+        if not candidates:
+            for relation in spec.get("constraints", []):
+                if str(relation.get("type", "")).lower() != "intersect":
+                    continue
+                entities = [str(item) for item in (relation.get("entities") or [])]
+                if len(entities) != 3 or entities[0] != point_id:
+                    continue
+                candidates.append((entities[1], entities[2]))
+
+        for seg_a, seg_b in candidates:
+            seg1 = self._segment_endpoints(seg_a, coords, primitive_map)
+            seg2 = self._segment_endpoints(seg_b, coords, primitive_map)
             if not seg1 or not seg2:
                 continue
             if seg1[0] not in coords or seg1[1] not in coords or seg2[0] not in coords or seg2[1] not in coords:
@@ -3100,15 +3352,28 @@ class CoordinateSceneCompiler:
             return self._line_intersection(coords[seg1[0]], coords[seg1[1]], coords[seg2[0]], coords[seg2[1]])
         return None
 
-    def _solve_parallel_endpoint(self, point_id: str, spec: Dict[str, Any], coords: Dict[str, List[float]], primitive_map: Dict[str, Dict[str, Any]]) -> Optional[List[float]]:
-        for relation in spec.get("constraints", []):
-            if str(relation.get("type", "")).lower() != "parallel":
-                continue
-            entities = [str(item) for item in (relation.get("entities") or [])]
-            if len(entities) != 2:
-                continue
-            seg1 = self._segment_endpoints(entities[0], coords, primitive_map)
-            seg2 = self._segment_endpoints(entities[1], coords, primitive_map)
+    def _solve_parallel_endpoint(
+        self,
+        point_id: str,
+        spec: Dict[str, Any],
+        coords: Dict[str, List[float]],
+        primitive_map: Dict[str, Dict[str, Any]],
+        indexes: Optional[Dict[str, Any]] = None,
+    ) -> Optional[List[float]]:
+        parallel_pairs = None
+        if isinstance(indexes, dict):
+            parallel_pairs = indexes.get("parallel_segment_pairs")
+        if not isinstance(parallel_pairs, list):
+            parallel_pairs = [
+                tuple(str(item).strip() for item in (relation.get("entities") or [])[:2])
+                for relation in spec.get("constraints", [])
+                if str(relation.get("type", "")).lower() == "parallel"
+                and len(relation.get("entities") or []) == 2
+            ]
+
+        for seg1_id, seg2_id in parallel_pairs:
+            seg1 = self._segment_endpoints(seg1_id, coords, primitive_map)
+            seg2 = self._segment_endpoints(seg2_id, coords, primitive_map)
             if not seg1 or not seg2:
                 continue
 
@@ -3119,7 +3384,7 @@ class CoordinateSceneCompiler:
                 if anchor not in coords or ref_seg[0] not in coords or ref_seg[1] not in coords:
                     continue
 
-                target_length = self._find_length_between(spec, anchor, point_id)
+                target_length = self._find_length_between(spec, anchor, point_id, indexes=indexes)
                 if target_length is None:
                     continue
 

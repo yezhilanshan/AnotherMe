@@ -7,6 +7,7 @@ import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { I18nProvider } from '@/lib/hooks/use-i18n';
 import { Toaster } from '@/components/ui/sonner';
 import { ServerProvidersInit } from '@/components/server-providers-init';
+import { AuthProvider } from '@/components/auth/auth-provider';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -23,11 +24,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN" className={`${inter.variable}`} suppressHydrationWarning>
       <body className="font-sans antialiased" suppressHydrationWarning>
         <ThemeProvider>
-          <I18nProvider>
-            <ServerProvidersInit />
-            {children}
-            <Toaster position="top-center" />
-          </I18nProvider>
+          <AuthProvider>
+            <I18nProvider>
+              <ServerProvidersInit />
+              {children}
+              <Toaster position="top-center" />
+            </I18nProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

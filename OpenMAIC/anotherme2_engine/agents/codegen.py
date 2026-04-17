@@ -3,8 +3,9 @@
 根据 coordinate_scene + step_contexts 生成稳定、可修复的动画代码。
 """
 
+import hashlib
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .formal_video_validator import FormalVideoValidator
 
@@ -15,9 +16,9 @@ class TemplateCodeGenerator:
     def __init__(self, canvas_config: Dict[str, Any]):
         self.canvas_config = canvas_config
         self.prefer_mathtex = bool(canvas_config.get("prefer_mathtex", False))
-        self.formula_math_font_size = int(canvas_config.get("formula_math_font_size", 28))
-        self.formula_text_font_size = int(canvas_config.get("formula_text_font_size", 28))
-        self.formula_max_visible_slots = int(canvas_config.get("formula_max_visible_slots", 6))
+        self.formula_math_font_size = int(canvas_config.get("formula_math_font_size", 24))
+        self.formula_text_font_size = int(canvas_config.get("formula_text_font_size", 24))
+        self.formula_max_visible_slots = int(canvas_config.get("formula_max_visible_slots", 8))
         self.validator = FormalVideoValidator(canvas_config)
 
     def generate(
@@ -48,7 +49,7 @@ class TemplateCodeGenerator:
         pixel_height = int(self.canvas_config.get("pixel_height", 1080))
         pixel_width = int(self.canvas_config.get("pixel_width", 1920))
         safe_margin = float(self.canvas_config.get("safe_margin", 0.4))
-        left_panel_x_max = float(self.canvas_config.get("left_panel_x_max", 1.0))
+        left_panel_x_max = float(self.canvas_config.get("left_panel_x_max", 0.75))
         geometry_bbox = self._coordinate_bbox(point_lookup)
         screen_points = self._screen_point_map(
             point_lookup,
@@ -143,6 +144,8 @@ class TemplateCodeGenerator:
                 continue
 
             if primitive_type == "segment" and len(refs) == 2:
+                if not self._segment_visible_for_render(primitive_id, primitive_display):
+                    continue
                 p1, p2 = refs
                 code.append(f"        if '{p1}' in points and '{p2}' in points:")
                 line_cls = "DashedLine" if line_style == "dashed" else "Line"
@@ -336,6 +339,7 @@ class TemplateCodeGenerator:
                     visible_formula_texts.clear()
 
                 code.append("        step_formula_group = VGroup()")
+                code.append("        formula_specs = []")
                 appended_formula_count = 0
                 for el in formula_elements:
                     raw_content = str(el.get("content", ""))
@@ -356,35 +360,40 @@ class TemplateCodeGenerator:
                         continue
                     if has_formula_group and not reset_formula_area and normalized_display_content in visible_formula_texts:
                         continue
-                    code.append(f"        block_nx = {center_nx:.6f}")
-                    code.append(f"        block_ny = {center_ny:.6f}")
-                    code.append(f"        block_nw = {w:.6f}")
-                    code.append(f"        block_nh = {h:.6f}")
-                    code.append("        block_x = -config.frame_width / 2 + block_nx * config.frame_width")
-                    code.append("        block_y = config.frame_height / 2 - block_ny * config.frame_height")
-                    code.append("        max_width = max(block_nw * config.frame_width - 0.30, 1.2)")
-                    code.append("        max_height = max(block_nh * config.frame_height - 0.10, 0.45)")
                     wrap_width_est = max(w * frame_width - 0.30, 1.2)
                     formula_tex = self._to_mathtex(display_content) if self.prefer_mathtex else ""
                     if formula_tex:
                         content = self._safe_text(formula_tex)
-                        code.append(
-                            f"        formula_obj = MathTex('{content}', font_size={self.formula_math_font_size}, color=YELLOW)"
-                        )
+                        code.append(f"        formula_specs.append(('math', '{content}', {center_nx:.6f}, {center_ny:.6f}, {w:.6f}, {h:.6f}))")
                     else:
                         wrapped = self._safe_text(self._wrap_plain_text(display_content, wrap_width_est))
-                        code.append(
-                            f"        formula_obj = Text('{wrapped}', font_size={self.formula_text_font_size}, color=YELLOW, line_spacing=0.85)"
-                        )
-                    code.append("        formula_obj.scale_to_fit_width(min(formula_obj.width, max_width))")
-                    code.append("        if formula_obj.height > max_height:")
-                    code.append("            formula_obj.scale_to_fit_height(max_height)")
-                    code.append("        formula_obj.move_to(np.array([block_x, block_y, 0]))")
-                    code.append("        step_formula_group.add(formula_obj)")
+                        code.append(f"        formula_specs.append(('text', '{wrapped}', {center_nx:.6f}, {center_ny:.6f}, {w:.6f}, {h:.6f}))")
                     visible_formula_texts.add(normalized_display_content)
                     appended_formula_count += 1
                 if appended_formula_count == 0:
                     code.append("        step_formula_group = VGroup()")
+                else:
+                    code.append("        uniform_formula_scale = 1.0")
+                    code.append("        pending_formula_objs = []")
+                    code.append("        for kind, content, block_nx, block_ny, block_nw, block_nh in formula_specs:")
+                    code.append("            block_x = -config.frame_width / 2 + block_nx * config.frame_width")
+                    code.append("            block_y = config.frame_height / 2 - block_ny * config.frame_height")
+                    code.append("            max_width = max(block_nw * config.frame_width - 0.30, 1.2)")
+                    code.append("            max_height = max(block_nh * config.frame_height - 0.10, 0.45)")
+                    code.append("            if kind == 'math':")
+                    code.append(f"                formula_obj = MathTex(content, font_size={self.formula_math_font_size}, color=YELLOW)")
+                    code.append("            else:")
+                    code.append(f"                formula_obj = Text(content, font_size={self.formula_text_font_size}, color=YELLOW, line_spacing=0.85)")
+                    code.append("            width_ratio = max_width / max(formula_obj.width, 1e-6)")
+                    code.append("            height_ratio = max_height / max(formula_obj.height, 1e-6)")
+                    code.append("            fit_ratio = min(1.0, width_ratio, height_ratio)")
+                    code.append("            uniform_formula_scale = min(uniform_formula_scale, fit_ratio)")
+                    code.append("            pending_formula_objs.append((formula_obj, block_x, block_y))")
+                    code.append("        for formula_obj, block_x, block_y in pending_formula_objs:")
+                    code.append("            if uniform_formula_scale < 1.0:")
+                    code.append("                formula_obj.scale(uniform_formula_scale)")
+                    code.append("            formula_obj.move_to(np.array([block_x, block_y, 0]))")
+                    code.append("            step_formula_group.add(formula_obj)")
                 show_time = self._safe_duration(
                     timing_budget.get("formula_show", min(1.0, duration * 0.25)),
                     0.15,
@@ -578,11 +587,56 @@ class TemplateCodeGenerator:
     ) -> None:
         if not isinstance(scene, dict):
             return
+        point_ids = set(point_lookup.keys())
         primitive_map = {
             str(item.get("id", "")).strip(): item
             for item in (scene.get("primitives") or [])
             if isinstance(item, dict) and str(item.get("id", "")).strip()
         }
+
+        for primitive in scene.get("primitives", []) or []:
+            if not isinstance(primitive, dict):
+                continue
+            primitive_id = str(primitive.get("id", "")).strip() or "<anonymous>"
+            primitive_type = str(primitive.get("type", "")).strip().lower()
+            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+
+            if primitive_type == "segment":
+                if len(refs) != 2:
+                    raise ValueError(f"segment {primitive_id} must reference exactly 2 points")
+                missing = [ref for ref in refs if ref not in point_ids]
+                if missing:
+                    raise ValueError(f"segment {primitive_id} references missing points: {missing}")
+            elif primitive_type == "polygon":
+                if len(refs) < 3:
+                    raise ValueError(f"polygon {primitive_id} must reference at least 3 points")
+                missing = [ref for ref in refs if ref not in point_ids]
+                if missing:
+                    raise ValueError(f"polygon {primitive_id} references missing points: {missing}")
+            elif primitive_type == "circle":
+                center = str(primitive.get("center", "")).strip()
+                radius_point = str(primitive.get("radius_point", "")).strip()
+                if not center or not radius_point:
+                    raise ValueError(f"circle {primitive_id} must reference center and radius_point")
+                missing = [ref for ref in [center, radius_point] if ref not in point_ids]
+                if missing:
+                    raise ValueError(f"circle {primitive_id} references missing points: {missing}")
+            elif primitive_type == "arc":
+                center = str(primitive.get("center", "")).strip()
+                if len(refs) != 2:
+                    raise ValueError(f"arc {primitive_id} must reference exactly 2 points")
+                missing = [ref for ref in ([center] + refs) if ref and ref not in point_ids]
+                if not center:
+                    raise ValueError(f"arc {primitive_id} must reference center")
+                if missing:
+                    raise ValueError(f"arc {primitive_id} references missing points: {missing}")
+            elif primitive_type in {"angle", "right_angle"}:
+                if len(refs) != 3:
+                    raise ValueError(f"{primitive_type} {primitive_id} must reference exactly 3 points")
+                missing = [ref for ref in refs if ref not in point_ids]
+                if missing:
+                    raise ValueError(f"{primitive_type} {primitive_id} references missing points: {missing}")
+
         display = scene.get("display", {}) if isinstance(scene.get("display"), dict) else {}
         primitive_display = display.get("primitives", {}) if isinstance(display.get("primitives"), dict) else {}
         for primitive_id, payload in primitive_display.items():
@@ -606,11 +660,18 @@ class TemplateCodeGenerator:
                 continue
             point_id, polygon_id = entities
             polygon = primitive_map.get(polygon_id)
-            if point_id not in point_lookup or not isinstance(polygon, dict):
-                continue
+            if point_id not in point_lookup:
+                raise ValueError(f"drawable scene constraint {relation_type} references missing point {point_id}")
+            if not isinstance(polygon, dict):
+                raise ValueError(f"drawable scene constraint {relation_type} references missing polygon {polygon_id}")
             refs = [str(item).strip() for item in (polygon.get("points") or []) if str(item).strip()]
-            if len(refs) < 3 or any(ref not in point_lookup for ref in refs):
-                continue
+            if len(refs) < 3:
+                raise ValueError(f"drawable scene polygon {polygon_id} has invalid point refs")
+            missing_polygon_points = [ref for ref in refs if ref not in point_lookup]
+            if missing_polygon_points:
+                raise ValueError(
+                    f"drawable scene polygon {polygon_id} references missing points: {missing_polygon_points}"
+                )
             inside = self._point_in_polygon(point_lookup[point_id], [point_lookup[ref] for ref in refs])
             if relation_type == "point_in_polygon" and not inside:
                 raise ValueError(f"drawable scene violates point_in_polygon for {point_id} in {polygon_id}")
@@ -640,15 +701,10 @@ class TemplateCodeGenerator:
         return inside
 
     def _build_class_name(self, project: Any) -> str:
-        source = getattr(project, "problem_text", "") or "TriangleFoldingProblem"
-        letters = re.sub(r"[^A-Za-z0-9]+", " ", source).title().replace(" ", "")
-        if not letters:
-            letters = "TriangleFoldingProblem"
-        if not letters[0].isalpha():
-            letters = "Scene" + letters
-        if not letters.endswith("Problem"):
-            letters = letters + "Problem"
-        return letters[:64]
+        source = str(getattr(project, "problem_text", "") or "math_animation")
+        digest = hashlib.sha1(source.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        # 固定短类名，显著降低 Windows 下 partial_movie_files 路径长度。
+        return f"SceneMain_{digest}"
 
     def _safe_text(self, text: str) -> str:
         return text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
@@ -870,6 +926,8 @@ class TemplateCodeGenerator:
             # 仅允许引用当前场景已可绘制的 primitive，避免后续访问未注册对象。
             drawable = True
             if primitive_type == "segment":
+                if not self._segment_visible_for_render(primitive_id, primitive_display):
+                    continue
                 drawable = len(refs) == 2 and all(ref in point_ids for ref in refs)
             elif primitive_type == "polygon":
                 drawable = len(refs) >= 3 and all(ref in point_ids for ref in refs)
@@ -935,6 +993,32 @@ class TemplateCodeGenerator:
             seen.add(key)
             deduped.append(target)
         return deduped
+
+    def _segment_source(self, primitive_id: str, primitive_display: Dict[str, Any]) -> str:
+        payload = primitive_display.get(primitive_id)
+        if not isinstance(payload, dict):
+            return ""
+        source = str(payload.get("source", "")).strip().lower()
+        if source:
+            return source
+        role = str(payload.get("role", "")).strip().lower()
+        style = str(payload.get("style", "")).strip().lower()
+        if role == "construction" or style == "dashed":
+            return "approved_auxiliary"
+        return "given"
+
+    def _segment_visible_for_render(self, primitive_id: str, primitive_display: Dict[str, Any]) -> bool:
+        payload = primitive_display.get(primitive_id)
+        if isinstance(payload, dict):
+            if payload.get("show") is False:
+                return False
+            source = self._segment_source(primitive_id, primitive_display)
+            if source and source not in {"given", "approved_auxiliary"}:
+                return False
+            role = str(payload.get("role", "")).strip().lower()
+            if role == "construction" and source != "approved_auxiliary":
+                return False
+        return True
 
     def _scene_points(self, scene: Dict[str, Any]) -> Dict[str, List[float]]:
         """从 coordinate_scene 或旧 scene_graph 中提取点坐标。"""

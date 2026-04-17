@@ -37,7 +37,7 @@ class VoiceAgent(BaseAgent):
         super().__init__(config, llm)
         self.system_prompt = config.get("system_prompt", self.SYSTEM_PROMPT)
         self.voice_name = config.get("voice", "zh-CN-XiaoxiaoNeural")
-        self.rate = config.get("rate", "+0%")
+        self.rate = config.get("rate", "+30%")
         self.volume = config.get("volume", "+10%")
         self.optimize_narration_with_llm = bool(config.get("optimize_narration_with_llm", True))
         raw_tts_concurrency = config.get("tts_concurrency", 3)
@@ -145,6 +145,31 @@ class VoiceAgent(BaseAgent):
         metadata["voice_fallback_ratio"] = round(fallback_ratio, 4)
 
         project.tts_audio_files = tts_files
+        project.total_duration = self._estimate_total_duration(script_steps, project.total_duration)
+        missing_audio_steps = [
+            int(getattr(step, "id", index + 1) or (index + 1))
+            for index, step in enumerate(script_steps)
+            if not str(getattr(step, "audio_file", "") or "").strip()
+        ]
+        if missing_audio_steps:
+            project.status = "failed"
+            project.error_message = (
+                "Narration audio missing for script steps: "
+                + ", ".join(str(item) for item in missing_audio_steps)
+            )
+            state["project"] = project
+            state["current_step"] = "voice_failed"
+            state["messages"].append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        "讲解音频生成失败：以下步骤未生成有效音频 "
+                        + ", ".join(str(item) for item in missing_audio_steps)
+                    ),
+                }
+            )
+            return state
+
         if fallback_ratio >= self.max_silent_fallback_ratio and fallback_audio_count > 0:
             project.status = "failed"
             project.error_message = (
@@ -178,6 +203,30 @@ class VoiceAgent(BaseAgent):
             }
         )
         return state
+
+    def _estimate_total_duration(self, steps: List[Any], fallback_total: Any) -> float:
+        total = 0.0
+        counted = 0
+        for step in steps:
+            raw = getattr(step, "audio_duration", None)
+            if raw is None:
+                raw = getattr(step, "duration", None)
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                val = 0.0
+            if val > 0:
+                total += val
+                counted += 1
+
+        if counted > 0 and total > 0:
+            return round(total, 2)
+
+        try:
+            fallback = float(fallback_total)
+        except (TypeError, ValueError):
+            fallback = 0.0
+        return round(max(0.0, fallback), 2)
 
     def _optimize_narrations(self, steps: List[Any], voice_style: Optional[Dict[str, Any]] = None) -> List[str]:
         print("[VoiceAgent] 优化旁白文案...")

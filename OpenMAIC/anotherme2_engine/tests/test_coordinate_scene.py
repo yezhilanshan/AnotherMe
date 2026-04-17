@@ -1,6 +1,7 @@
 import unittest
 
 from agents.coordinate_scene import CoordinateSceneCompiler, CoordinateSceneError
+from agents.canvas_scene import CanvasScene
 from agents.codegen import TemplateCodeGenerator
 from agents.geometry_fact_compiler import GeometryFactCompiler
 
@@ -169,10 +170,96 @@ class CoordinateSceneCompilerTests(unittest.TestCase):
         self.assertIn("E", point_lookup)
         self.assertTrue(0.0 < point_lookup["E"][0] < point_lookup["A"][0])
 
+    def test_fold_guardrail_does_not_auto_expand_reflected_segments(self) -> None:
+        facts = {
+            "points": ["A", "B", "C", "D", "B′", "C′"],
+            "segments": ["AB", "BC", "CD", "DA", "B′C′", "C′D"],
+            "polygons": ["ABCD", "AB′C′D"],
+            "relations": [],
+            "measurements": [],
+        }
+
+        geometry_spec = self.fact_compiler.compile(
+            facts,
+            problem_text="将菱形ABCD沿AD折叠，使B、C对应到B′、C′",
+        )
+
+        segment_pairs = {
+            tuple(str(p).strip() for p in primitive.get("points", []))
+            for primitive in geometry_spec.get("primitives", [])
+            if str(primitive.get("type", "")).strip().lower() == "segment"
+        }
+        undirected_pairs = {frozenset(pair) for pair in segment_pairs if len(pair) == 2}
+
+        self.assertIn(frozenset(("B'", "C'")), undirected_pairs)
+        self.assertNotIn(frozenset(("A", "B'")), undirected_pairs)
+
+    def test_fold_guardrail_preserves_explicit_reflected_constraints_and_measurements(self) -> None:
+        facts = {
+            "points": ["A", "B", "D", "B′"],
+            "segments": ["AB", "BB′", "DB′"],
+            "relations": [
+                {"type": "midpoint", "point": "D", "segment": "BB′"},
+            ],
+            "measurements": [
+                {"type": "length", "segment": "DB′", "value": 3},
+            ],
+        }
+
+        geometry_spec = self.fact_compiler.compile(
+            facts,
+            problem_text="将线段BB′沿AB折叠后，点D是BB′中点，且DB′=3",
+        )
+
+        self.assertTrue(
+            any(
+                str(item.get("type", "")).strip().lower() == "midpoint"
+                and "D" in [str(entity).strip() for entity in (item.get("entities") or [])]
+                for item in geometry_spec.get("constraints", [])
+            )
+        )
+        self.assertTrue(
+            any(
+                str(item.get("type", "")).strip().lower() == "length"
+                and float(item.get("value", 0)) == 3.0
+                for item in geometry_spec.get("measurements", [])
+            )
+        )
+
     def test_parse_tangent_value_supports_fraction_notation(self) -> None:
         self.assertAlmostEqual(self.compiler._parse_tangent_value("tan(∠ABC)=1/2"), 0.5)
         self.assertAlmostEqual(self.compiler._parse_tangent_value("arctan(3/4)"), 0.75)
         self.assertAlmostEqual(self.compiler._parse_tangent_value("tanB=2"), 2.0)
+
+    def test_export_ggb_filters_unapproved_segment_sources(self) -> None:
+        coordinate_scene = {
+            "mode": "2d",
+            "points": [
+                {"id": "A", "coord": [0, 0]},
+                {"id": "B", "coord": [4, 0]},
+                {"id": "C", "coord": [0, 3]},
+            ],
+            "primitives": [
+                {"id": "seg_AB", "type": "segment", "points": ["A", "B"]},
+                {"id": "seg_BC", "type": "segment", "points": ["B", "C"]},
+                {"id": "seg_AC", "type": "segment", "points": ["A", "C"]},
+            ],
+            "constraints": [],
+            "measurements": [],
+            "display": {
+                "primitives": {
+                    "seg_AB": {"source": "given"},
+                    "seg_BC": {"source": "approved_auxiliary", "style": "dashed", "role": "construction"},
+                    "seg_AC": {"source": "derived"},
+                }
+            },
+        }
+
+        commands = self.compiler.export_ggb_commands(coordinate_scene)
+        command_text = "\n".join(commands)
+        self.assertIn("seg_AB = Segment(A, B)", command_text)
+        self.assertIn("seg_BC = Segment(B, C)", command_text)
+        self.assertNotIn("seg_AC = Segment(A, C)", command_text)
 
 
 class TemplateCodeGeneratorTests(unittest.TestCase):
@@ -206,6 +293,59 @@ class TemplateCodeGeneratorTests(unittest.TestCase):
         code = generator.generate(project, coordinate_scene, [])
         self.assertIn("Circle(radius=np.linalg.norm", code)
         self.assertIn("lines['seg_AB']", code)
+
+    def test_codegen_raises_when_primitive_references_missing_point(self) -> None:
+        generator = TemplateCodeGenerator(
+            {
+                "frame_height": 8.0,
+                "frame_width": 14.222,
+                "pixel_height": 1080,
+                "pixel_width": 1920,
+                "safe_margin": 0.4,
+                "left_panel_x_max": 1.0,
+            }
+        )
+        coordinate_scene = {
+            "mode": "2d",
+            "points": [
+                {"id": "A", "coord": [0, 0]},
+                {"id": "B", "coord": [4, 0]},
+            ],
+            "primitives": [
+                {"id": "seg_AC", "type": "segment", "points": ["A", "C"]},
+            ],
+            "constraints": [],
+            "display": {},
+            "measurements": [],
+        }
+        project = type("Project", (), {"problem_text": "invalid scene", "script_steps": []})()
+
+        with self.assertRaisesRegex(ValueError, "missing points"):
+            generator.generate(project, coordinate_scene, [])
+
+
+class CanvasSceneLayoutTests(unittest.TestCase):
+    def test_formula_slots_replace_old_content_and_enforce_cap(self) -> None:
+        scene = CanvasScene(max_formula_slots=3)
+
+        first = scene.reserve_step_formula_blocks(
+            step_id=1,
+            formula_items=["AB=4", "BC=6", "AC=10", "overflow"],
+        )
+        self.assertEqual(len(first), 3)
+        self.assertEqual([item.id for item in first], ["formula_slot_1", "formula_slot_2", "formula_slot_3"])
+
+        second = scene.reserve_step_formula_blocks(
+            step_id=2,
+            formula_items=["S=1/2ab"],
+            reset_formula_area=True,
+        )
+        self.assertEqual(len(second), 1)
+        self.assertEqual(second[0].id, "formula_slot_1")
+
+        formula_snapshot = scene.get_formula_snapshot()
+        self.assertEqual(len(formula_snapshot), 1)
+        self.assertEqual(formula_snapshot[0]["content"], "S=1/2ab")
 
 
 if __name__ == "__main__":

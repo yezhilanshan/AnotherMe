@@ -97,6 +97,7 @@ export function buildStructuredPrompt(
   whiteboardLedger?: WhiteboardActionRecord[],
   userProfile?: { nickname?: string; bio?: string },
   agentResponses?: AgentTurnSummary[],
+  systemPromptAddendum?: string,
 ): string {
   // Determine current scene type for action filtering
   const currentScene = storeState.currentSceneId
@@ -162,6 +163,14 @@ Personalize your teaching based on their background when relevant. Address them 
     : '';
 
   const roleGuideline = ROLE_GUIDELINES[agentConfig.role] || ROLE_GUIDELINES.student;
+  const trimmedSystemPromptAddendum = systemPromptAddendum?.trim() || '';
+  const detailedTutorMode = agentConfig.role === 'teacher' && Boolean(trimmedSystemPromptAddendum);
+  const addendumSection = trimmedSystemPromptAddendum
+    ? `\n# Additional System Instructions (HIGHEST PRIORITY)\n${trimmedSystemPromptAddendum}\n`
+    : '';
+  const speechFormattingRule = detailedTutorMode
+    ? '- Use clear numbered sections to organize long explanations when helpful (for example: 1. 结论 2. 原理 3. 例子).'
+    : '- NEVER use markdown formatting (blockquotes >, headings #, bold **, lists -, code blocks) in text content — it is spoken aloud, not rendered';
 
   // Build language constraint from stage language
   const courseLanguage = storeState.stage?.language;
@@ -177,7 +186,7 @@ ${agentConfig.persona}
 
 ## Your Classroom Role
 ${roleGuideline}
-${studentProfileSection}${peerContext}${languageConstraint}
+${studentProfileSection}${peerContext}${languageConstraint}${addendumSection}
 # Output Format
 You MUST output a JSON array for ALL responses. Each element is an object with a \`type\` field:
 
@@ -201,10 +210,10 @@ ${orderingPrinciples}
 - Do NOT describe your actions - just speak naturally as a teacher
 - Students see action results appear on screen - you don't need to announce them
 - Your speech should flow naturally regardless of whether actions succeed or fail
-- NEVER use markdown formatting (blockquotes >, headings #, bold **, lists -, code blocks) in text content — it is spoken aloud, not rendered
+${speechFormattingRule}
 
 ## Length & Style (CRITICAL)
-${buildLengthGuidelines(agentConfig.role)}
+${buildLengthGuidelines(agentConfig.role, detailedTutorMode)}
 
 ### Good Examples
 ${spotlightExamples}[{"type":"action","name":"wb_open","params":{}},{"type":"action","name":"wb_draw_text","params":{"content":"Step 1: 6CO₂ + 6H₂O → C₆H₁₂O₆ + 6O₂","x":100,"y":100,"fontSize":24}},{"type":"text","content":"Look at this chemical equation — notice how the reactants and products correspond."}]
@@ -260,9 +269,18 @@ IMPORTANT: As you are starting this discussion, begin by introducing the topic n
  * All agents should be concise and conversational. Student agents must be
  * significantly shorter than teacher to avoid overshadowing the teacher's role.
  */
-function buildLengthGuidelines(role: string): string {
+function buildLengthGuidelines(role: string, preferDetailed = false): string {
   const common = `- Length targets count ONLY your speech text (type:"text" content). Actions (spotlight, whiteboard, etc.) do NOT count toward length. Use as many actions as needed — they don't make your speech "too long."
 - Speak conversationally and naturally — this is a live classroom, not a textbook. Use oral language, not written prose.`;
+
+  if (role === 'teacher' && preferDetailed) {
+    return `- Keep your TOTAL speech text around 400-900 Chinese characters (or equivalent in other languages) unless the user explicitly asks for a brief answer.
+${common}
+- Default to a structured deep-explanation flow: Conclusion -> Principles -> Examples -> Common mistakes -> Practice tasks.
+- For problem-solving, show complete step-by-step derivation and do not skip key transitions.
+- Explain key concepts with definition, purpose, boundary conditions, and comparisons when relevant.
+- End your response with the exact sentence: "你可以继续问我的3个问题".`;
+  }
 
   if (role === 'teacher') {
     return `- Keep your TOTAL speech text around 100 characters (across all text objects combined). Prefer 2-3 short sentences over one long paragraph.

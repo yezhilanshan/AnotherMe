@@ -1,4 +1,4 @@
-import { after, type NextRequest } from 'next/server';
+import { type NextRequest } from 'next/server';
 import { nanoid } from 'nanoid';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { type GenerateClassroomInput } from '@/lib/server/classroom-generation';
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     const job = await createClassroomGenerationJob(jobId, body);
     const pollUrl = `${baseUrl}/api/generate-classroom/${jobId}`;
 
-    after(() => runClassroomGenerationJob(jobId, body, baseUrl));
+    void runClassroomGenerationJob(jobId, body, baseUrl);
 
     return apiSuccess(
       {

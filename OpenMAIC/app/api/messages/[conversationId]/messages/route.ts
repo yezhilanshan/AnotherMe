@@ -5,6 +5,10 @@ import {
   listGatewayMessages,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveRequestUserId } from '@/lib/auth/request-user';
+import { AuthError } from '@/lib/auth/types';
+
+export const runtime = 'nodejs';
 
 export async function GET(
   request: NextRequest,
@@ -19,14 +23,19 @@ export async function GET(
     const limit = Number(request.nextUrl.searchParams.get('limit') || '100');
     const beforeSeqRaw = request.nextUrl.searchParams.get('beforeSeq');
     const beforeSeq = beforeSeqRaw ? Number(beforeSeqRaw) : undefined;
+    const userId = await resolveRequestUserId(request, request.nextUrl.searchParams.get('userId'));
 
     const messages = await listGatewayMessages({
       conversationId,
+      userId,
       limit: Number.isFinite(limit) ? limit : 100,
       beforeSeq: typeof beforeSeq === 'number' && Number.isFinite(beforeSeq) ? beforeSeq : undefined,
     });
     return apiSuccess({ messages });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }
@@ -65,10 +74,14 @@ export async function POST(
       }>;
     };
 
+    const requestUserId = await resolveRequestUserId(request);
     const senderId = (body.senderId || '').trim();
     const content = (body.content || '').trim();
     if (!senderId || !content) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'senderId and content are required');
+    }
+    if (senderId !== requestUserId && senderId !== 'system-assistant') {
+      return apiError('INVALID_REQUEST', 403, 'senderId does not match current user');
     }
 
     const message = await createGatewayMessage({
@@ -85,6 +98,9 @@ export async function POST(
 
     return apiSuccess({ message }, 201);
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }

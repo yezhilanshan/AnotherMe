@@ -8,9 +8,26 @@ import {
 
 export const maxDuration = 30;
 
-function normalizeResult(result: Awaited<ReturnType<typeof getAnotherMe2ProblemVideoResult>>) {
+function isGatewayJobNotFound(status: number, message: string): boolean {
+  if (status !== 404) return false;
+  const lowered = message.toLowerCase();
+  return lowered.includes('job not found') || lowered.includes('任务不存在');
+}
+
+function normalizeResult(
+  jobId: string,
+  result: Awaited<ReturnType<typeof getAnotherMe2ProblemVideoResult>>,
+) {
+  const rawVideoUrl = typeof result.video_url === 'string' ? result.video_url.trim() : '';
+  const videoUrl =
+    rawVideoUrl && /^https?:\/\//i.test(rawVideoUrl)
+      ? rawVideoUrl
+      : rawVideoUrl
+        ? `/api/problem-video/${encodeURIComponent(jobId)}/result-video`
+        : null;
+
   return {
-    videoUrl: result.video_url,
+    videoUrl,
     durationSec: result.duration_sec,
     scriptStepsCount: result.script_steps_count,
     debugBundleUrl: result.debug_bundle_url || null,
@@ -37,12 +54,22 @@ export async function GET(
     };
 
     if (job.status === 'succeeded') {
-      payload.result = normalizeResult(await getAnotherMe2ProblemVideoResult(jobId));
+      const result = await getAnotherMe2ProblemVideoResult(jobId);
+      payload.result = normalizeResult(jobId, result);
     }
 
     return apiSuccess(payload);
   } catch (error) {
     if (isAnotherMe2GatewayError(error)) {
+      if (isGatewayJobNotFound(error.status, error.message)) {
+        return apiSuccess({
+          jobId: (await context.params).jobId,
+          status: 'failed',
+          step: 'failed',
+          progress: 100,
+          errorMessage: '任务不存在或已被清理',
+        });
+      }
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }
     return apiError(

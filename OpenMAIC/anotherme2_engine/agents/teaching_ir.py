@@ -6,6 +6,7 @@ Build Geometry IR + Teaching IR for step-level animation planning.
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import Any, Dict, List, Optional, Sequence, Set
 
@@ -290,6 +291,7 @@ class TeachingIRPlanner:
 
     def build_geometry_ir(self, metadata: Dict[str, Any], problem_text: str) -> Dict[str, Any]:
         drawable_scene = metadata.get("drawable_scene") if isinstance(metadata.get("drawable_scene"), dict) else {}
+        coordinate_scene = metadata.get("coordinate_scene") if isinstance(metadata.get("coordinate_scene"), dict) else {}
         semantic_graph = metadata.get("semantic_graph") if isinstance(metadata.get("semantic_graph"), dict) else {}
         geometry_facts = metadata.get("geometry_facts") if isinstance(metadata.get("geometry_facts"), dict) else {}
         geometry_spec = metadata.get("geometry_spec") if isinstance(metadata.get("geometry_spec"), dict) else {}
@@ -308,12 +310,21 @@ class TeachingIRPlanner:
             )
             if str(item).strip()
         ]
-        fold_axis = self._detect_fold_axis(problem_text, segments)
-        image_pairs = self._extract_image_pairs(drawable_scene)
-        relations = self._collect_relations(metadata)
-
         pattern_name = str(problem_pattern_payload.get("problem_pattern", "")).strip()
         sub_pattern = str(problem_pattern_payload.get("sub_pattern", "")).strip()
+        image_pairs = self._extract_image_pairs(drawable_scene, coordinate_scene=coordinate_scene)
+        allow_scene_axis_inference = bool(
+            re.search(r"折叠|翻折|对折|fold|reflect", str(problem_text or ""), re.IGNORECASE)
+            or ("fold" in {item.lower() for item in templates})
+            or pattern_name == "fold_transform"
+        )
+        fold_axis = self._detect_fold_axis(
+            problem_text,
+            segments,
+            coordinate_scene=coordinate_scene,
+            allow_scene_inference=allow_scene_axis_inference,
+        )
+        relations = self._collect_relations(metadata)
 
         problem_type = self._classify_problem_type(problem_text, templates, fold_axis)
         pattern_problem_type = self._problem_type_from_pattern(pattern_name)
@@ -359,6 +370,11 @@ class TeachingIRPlanner:
         all_targets = self._all_entity_targets(geometry_ir)
         fold_axis = str(geometry_ir.get("transform", {}).get("fold_axis", "")).strip()
         image_pairs = list(geometry_ir.get("transform", {}).get("image_pairs", []))
+        extra_geometry_hints = self._resolve_extra_geometry_hints(
+            metadata=metadata or {},
+            geometry_ir=geometry_ir,
+            problem_type=problem_type,
+        )
 
         step_payloads: List[Dict[str, Any]] = []
         for index, step in enumerate(steps, start=1):
@@ -366,6 +382,12 @@ class TeachingIRPlanner:
             title = str(getattr(step, "title", "") or "")
             narration = str(getattr(step, "narration", "") or "")
             visual_cues = list(getattr(step, "visual_cues", []) or [])
+            spoken_formulas = self._normalize_string_list(getattr(step, "spoken_formulas", []) or [])
+            visible_segments = self._normalize_string_list(getattr(step, "visible_segments", []) or [])
+            required_actions = self._normalize_required_actions(getattr(step, "required_actions", []) or [])
+            animation_policy = self._normalize_animation_policy(
+                getattr(step, "animation_policy", "auto")
+            )
             step_text = "\n".join([title, narration, " ".join(str(item) for item in visual_cues)])
 
             focus_targets = self._extract_focus_targets(step_text, all_targets)
@@ -382,7 +404,12 @@ class TeachingIRPlanner:
                     }
                 )
 
+            if animation_policy != "none":
+                actions.extend(required_actions)
+
             if (
+                animation_policy == "auto"
+                and
                 problem_type == "fold_transform"
                 and fold_axis
                 and self._is_fold_step(step_text, index)
@@ -398,17 +425,28 @@ class TeachingIRPlanner:
                     )
                 )
 
-            actions.extend(
-                self.aux_engine.suggest(
-                    step_text=step_text,
-                    geometry_ir=geometry_ir,
-                    focus_targets=focus_targets,
-                    problem_pattern=problem_pattern,
-                    sub_pattern=sub_pattern,
+            if animation_policy == "auto":
+                actions.extend(
+                    self.aux_engine.suggest(
+                        step_text=step_text,
+                        geometry_ir=geometry_ir,
+                        focus_targets=focus_targets,
+                        problem_pattern=problem_pattern,
+                        sub_pattern=sub_pattern,
+                    )
                 )
-            )
+                actions.extend(
+                    self._actions_from_extra_geometry_hints(
+                        step_text=step_text,
+                        step_index=index,
+                        focus_targets=focus_targets,
+                        geometry_ir=geometry_ir,
+                        fold_axis=fold_axis,
+                        hints=extra_geometry_hints,
+                    )
+                )
 
-            if self._contains_relation_words(step_text):
+            if animation_policy in {"auto", "required"} and self._contains_relation_words(step_text):
                 actions.append(
                     {
                         "action": "highlight_relation",
@@ -425,6 +463,10 @@ class TeachingIRPlanner:
                     "title": title,
                     "focus_targets": focus_targets,
                     "actions": self._dedupe_actions(actions),
+                    "spoken_formulas": spoken_formulas,
+                    "visible_segments": visible_segments,
+                    "required_actions": required_actions,
+                    "animation_policy": animation_policy,
                 }
             )
 
@@ -440,6 +482,122 @@ class TeachingIRPlanner:
                 "problem_text": str(problem_text or "")[:200],
             },
         }
+
+    def _resolve_extra_geometry_hints(
+        self,
+        *,
+        metadata: Dict[str, Any],
+        geometry_ir: Dict[str, Any],
+        problem_type: str,
+    ) -> Dict[str, Any]:
+        vision_signals = (
+            metadata.get("vision_semantic_signals")
+            if isinstance(metadata.get("vision_semantic_signals"), dict)
+            else {}
+        )
+        pattern_payload = (
+            metadata.get("problem_pattern")
+            if isinstance(metadata.get("problem_pattern"), dict)
+            else {}
+        )
+
+        recommended_actions: List[str] = []
+        for action in vision_signals.get("recommended_geometry_actions", []) or []:
+            token = str(action).strip()
+            if token:
+                recommended_actions.append(token)
+        for action in pattern_payload.get("recommended_geometry_actions", []) or []:
+            token = str(action).strip()
+            if token:
+                recommended_actions.append(token)
+        recommended_actions = list(dict.fromkeys(recommended_actions))
+
+        requires_extra = bool(
+            vision_signals.get("needs_extra_geometry_animation", False)
+            or pattern_payload.get("requires_geometry_animation", False)
+            or (problem_type == "fold_transform")
+        )
+        return {
+            "requires_extra": requires_extra,
+            "recommended_actions": recommended_actions,
+        }
+
+    def _actions_from_extra_geometry_hints(
+        self,
+        *,
+        step_text: str,
+        step_index: int,
+        focus_targets: Sequence[str],
+        geometry_ir: Dict[str, Any],
+        fold_axis: str,
+        hints: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if not hints.get("requires_extra"):
+            return []
+
+        actions: List[Dict[str, Any]] = []
+        suggested = {
+            str(item).strip()
+            for item in (hints.get("recommended_actions") or [])
+            if str(item).strip()
+        }
+        has_relation_words = self._contains_relation_words(step_text)
+        has_distance_signal = bool(re.search(r"距离|垂线|perpendicular|distance", step_text, re.IGNORECASE))
+        has_similarity_signal = bool(re.search(r"相似|全等|similar|congruent", step_text, re.IGNORECASE))
+
+        if "animate_fold" in suggested and fold_axis and (
+            self._is_fold_step(step_text, step_index) or step_index <= 2
+        ):
+            actions.append({"action": "highlight_fold_axis", "axis": fold_axis})
+            actions.append(
+                {
+                    "action": "animate_fold",
+                    "axis": fold_axis,
+                    "targets": list(focus_targets or []),
+                }
+            )
+
+        if "draw_perpendicular_auxiliary" in suggested and (has_relation_words or has_distance_signal):
+            from_point = self.aux_engine._pick_point(focus_targets, geometry_ir)
+            to_line = fold_axis or self.aux_engine._pick_segment(focus_targets, geometry_ir)
+            if from_point and to_line:
+                actions.append(
+                    {
+                        "action": "draw_perpendicular_auxiliary",
+                        "from": from_point,
+                        "to_line": to_line,
+                        "reason": "vision_semantic_hint",
+                    }
+                )
+
+        if "draw_connection_auxiliary" in suggested and (has_relation_words or has_similarity_signal):
+            pair = self.aux_engine._pick_two_points(focus_targets, geometry_ir)
+            if pair:
+                actions.append(
+                    {
+                        "action": "draw_connection_auxiliary",
+                        "from": pair[0],
+                        "to": pair[1],
+                        "reason": "vision_semantic_hint",
+                    }
+                )
+
+        if "connect_center_tangent" in suggested and (
+            ("切线" in step_text) or ("tangent" in step_text.lower())
+        ):
+            center = self.aux_engine._pick_center_point(geometry_ir)
+            tangent_point = self.aux_engine._pick_point(focus_targets, geometry_ir)
+            if center and tangent_point and center != tangent_point:
+                actions.append(
+                    {
+                        "action": "connect_center_tangent",
+                        "from": center,
+                        "to": tangent_point,
+                        "reason": "vision_semantic_hint",
+                    }
+                )
+
+        return actions
 
     def get_step_plan(
         self,
@@ -551,11 +709,18 @@ class TeachingIRPlanner:
             )
         return relations
 
-    def _extract_image_pairs(self, drawable_scene: Dict[str, Any]) -> List[Dict[str, str]]:
+    def _extract_image_pairs(
+        self,
+        drawable_scene: Dict[str, Any],
+        *,
+        coordinate_scene: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, str]]:
         pairs: List[Dict[str, str]] = []
-        points = drawable_scene.get("points")
-        if isinstance(points, list):
-            for item in points:
+
+        def _append_pairs_from_points(points_payload: Any) -> None:
+            if not isinstance(points_payload, list):
+                return
+            for item in points_payload:
                 if not isinstance(item, dict):
                     continue
                 point_id = str(item.get("id", "")).strip()
@@ -567,6 +732,11 @@ class TeachingIRPlanner:
                 source = str(derived.get("source", "")).strip()
                 if source:
                     pairs.append({"source": source, "image": point_id})
+
+        points = drawable_scene.get("points")
+        _append_pairs_from_points(points)
+        if isinstance(coordinate_scene, dict):
+            _append_pairs_from_points(coordinate_scene.get("points"))
 
         if not pairs:
             point_ids: Set[str] = set()
@@ -592,11 +762,14 @@ class TeachingIRPlanner:
             dedup[key] = pair
         return list(dedup.values())
 
-    def _detect_fold_axis(self, problem_text: str, segments: Sequence[Dict[str, Any]]) -> str:
-        text = str(problem_text or "")
-        if not text:
-            return ""
-
+    def _detect_fold_axis(
+        self,
+        problem_text: str,
+        segments: Sequence[Dict[str, Any]],
+        *,
+        coordinate_scene: Optional[Dict[str, Any]] = None,
+        allow_scene_inference: bool = False,
+    ) -> str:
         label_to_id: Dict[str, str] = {}
         for segment in segments:
             if not isinstance(segment, dict):
@@ -608,20 +781,55 @@ class TeachingIRPlanner:
             if seg_id:
                 label_to_id[seg_id.upper()] = seg_id
 
-        for match in self.FOLD_PATTERN.finditer(text):
-            raw = (match.group(1) or match.group(2) or "").strip().replace(" ", "")
-            if not raw:
-                continue
-            upper_raw = raw.upper()
-            if upper_raw in label_to_id:
-                return label_to_id[upper_raw]
-            candidate = f"SEG_{upper_raw}"
-            if candidate in label_to_id:
-                return label_to_id[candidate]
-            if upper_raw:
-                return f"seg_{upper_raw}"
+        text = str(problem_text or "")
+        if text:
+            for match in self.FOLD_PATTERN.finditer(text):
+                raw = (match.group(1) or match.group(2) or "").strip().replace(" ", "")
+                resolved = self._resolve_axis_token(raw, label_to_id)
+                if resolved:
+                    return resolved
+
+        # OCR 可能漏掉“沿XX折叠”，此时从 coordinate_scene 的 reflect_point 轴信息回推。
+        if allow_scene_inference and isinstance(coordinate_scene, dict):
+            for point in coordinate_scene.get("points", []) or []:
+                if not isinstance(point, dict):
+                    continue
+                derived = point.get("derived")
+                if not isinstance(derived, dict):
+                    continue
+                if str(derived.get("type", "")).strip().lower() != "reflect_point":
+                    continue
+                axis_refs = [str(item).strip() for item in (derived.get("axis") or []) if str(item).strip()]
+                if len(axis_refs) < 2:
+                    continue
+                axis_token = f"{axis_refs[0]}{axis_refs[1]}"
+                resolved = self._resolve_axis_token(axis_token, label_to_id)
+                if resolved:
+                    return resolved
 
         return ""
+
+    def _resolve_axis_token(self, raw: str, label_to_id: Dict[str, str]) -> str:
+        token = str(raw or "").strip().replace(" ", "")
+        if not token:
+            return ""
+        upper_token = token.upper()
+        if upper_token in label_to_id:
+            return label_to_id[upper_token]
+        prefixed = f"SEG_{upper_token}"
+        if prefixed in label_to_id:
+            return label_to_id[prefixed]
+
+        refs = self._split_segment_points(upper_token)
+        if len(refs) == 2:
+            reversed_token = f"{refs[1]}{refs[0]}"
+            if reversed_token in label_to_id:
+                return label_to_id[reversed_token]
+            reversed_prefixed = f"SEG_{reversed_token}"
+            if reversed_prefixed in label_to_id:
+                return label_to_id[reversed_prefixed]
+
+        return f"seg_{upper_token}"
 
     def _classify_problem_type(self, problem_text: str, templates: Sequence[str], fold_axis: str) -> str:
         text = str(problem_text or "").lower()
@@ -716,6 +924,89 @@ class TeachingIRPlanner:
             unique.append(item)
         return unique
 
+    def _normalize_string_list(self, value: Any) -> List[str]:
+        if isinstance(value, str):
+            token = value.strip()
+            return [token] if token else []
+        if not isinstance(value, list):
+            return []
+        result: List[str] = []
+        for item in value:
+            token = str(item).strip()
+            if token:
+                result.append(token)
+        return list(dict.fromkeys(result))
+
+    def _normalize_animation_policy(self, value: Any) -> str:
+        policy = str(value or "auto").strip().lower()
+        if policy in {"auto", "required", "none"}:
+            return policy
+        return "auto"
+
+    def _normalize_required_actions(self, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+
+            action_type = str(item.get("action") or item.get("type") or "").strip().lower()
+            if not action_type:
+                continue
+
+            target = str(item.get("target", "")).strip()
+            targets = [
+                str(token).strip()
+                for token in (item.get("targets") or [])
+                if str(token).strip()
+            ]
+            if target and target not in targets:
+                targets.insert(0, target)
+
+            if action_type in {"show_point", "show_segment", "show_auxiliary_segment", "fade_out_object"}:
+                normalized.append({"action": "maintain_scene", "targets": targets})
+                continue
+
+            if action_type in {"highlight_segment", "highlight_angle", "highlight_triangle", "highlight_entity"}:
+                normalized.append({"action": "highlight_entity", "targets": targets})
+                continue
+
+            if action_type in {"highlight_parallel", "show_formula_relation"}:
+                normalized.append({"action": "highlight_relation", "targets": targets})
+                continue
+
+            if action_type in {"move_point", "reflect_point_over_line", "animate_fold"}:
+                axis = str(item.get("axis") or item.get("to_line") or item.get("line") or "").strip()
+                payload: Dict[str, Any] = {"action": "animate_fold", "targets": targets}
+                if axis:
+                    payload["axis"] = axis
+                normalized.append(payload)
+                continue
+
+            if action_type in {
+                "draw_perpendicular_auxiliary",
+                "draw_connection_auxiliary",
+                "connect_center_tangent",
+            }:
+                payload = {"action": action_type}
+                for key in ("from", "to", "to_line", "reason"):
+                    val = str(item.get(key, "")).strip()
+                    if val:
+                        payload[key] = val
+                if targets:
+                    payload["targets"] = targets
+                normalized.append(payload)
+                continue
+
+            # 保留未知动作，交由执行层进行二次过滤。
+            copied = copy.deepcopy(item)
+            copied["action"] = str(copied.get("action") or copied.get("type") or "").strip()
+            normalized.append(copied)
+
+        return normalized
+
     def _action_key(self, action: Dict[str, Any]) -> str:
         action_name = str(action.get("action", "")).strip()
         if action_name in {"highlight_entity", "highlight_relation"}:
@@ -729,10 +1020,10 @@ class TeachingIRPlanner:
         if action_name == "draw_perpendicular_auxiliary":
             return (
                 f"{action_name}:{action.get('from', '')}->{action.get('to_line', '')}:"
-                f"{action.get('new_point', '')}:{action.get('reason', '')}"
+                f"{action.get('new_point', '')}"
             )
         if action_name == "draw_connection_auxiliary":
-            return f"{action_name}:{action.get('from', '')}->{action.get('to', '')}:{action.get('reason', '')}"
+            return f"{action_name}:{action.get('from', '')}->{action.get('to', '')}"
         if action_name == "connect_center_tangent":
-            return f"{action_name}:{action.get('from', '')}->{action.get('to', '')}:{action.get('reason', '')}"
+            return f"{action_name}:{action.get('from', '')}->{action.get('to', '')}"
         return action_name

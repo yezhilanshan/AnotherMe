@@ -131,6 +131,31 @@ class ConversationSummary(BaseModel):
     updated_at: str
 
 
+class ConversationMemberSummary(BaseModel):
+    conversation_id: str
+    user_id: str
+    joined_at: str
+    mute_flag: bool = False
+    unread_count: int = 0
+    last_read_message_id: Optional[str] = None
+    last_read_seq: int = 0
+
+
+class AddConversationMembersRequest(BaseModel):
+    operator_user_id: str = Field(..., min_length=1)
+    member_ids: list[str] = Field(..., min_length=1)
+
+
+class RemoveConversationMemberRequest(BaseModel):
+    operator_user_id: str = Field(..., min_length=1)
+
+
+class RemoveConversationMemberResponse(BaseModel):
+    conversation_id: str
+    member_user_id: str
+    removed: bool
+
+
 class CreateMessageRequest(BaseModel):
     sender_id: str = Field(..., min_length=1)
     message_type: str = "text"

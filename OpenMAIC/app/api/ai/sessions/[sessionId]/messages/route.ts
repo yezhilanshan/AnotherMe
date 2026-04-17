@@ -5,6 +5,10 @@ import {
   listGatewayAIMessages,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveRequestUserId } from '@/lib/auth/request-user';
+import { AuthError } from '@/lib/auth/types';
+
+export const runtime = 'nodejs';
 
 export async function GET(
   request: NextRequest,
@@ -15,6 +19,7 @@ export async function GET(
     if (!sessionId) {
       return apiError('INVALID_REQUEST', 400, 'Missing session id');
     }
+    await resolveRequestUserId(request);
 
     const limit = Number(request.nextUrl.searchParams.get('limit') || '200');
     const messages = await listGatewayAIMessages({
@@ -23,6 +28,9 @@ export async function GET(
     });
     return apiSuccess({ messages });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }
@@ -63,12 +71,13 @@ export async function POST(
     if (!role || !content) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'role and content are required');
     }
+    const userId = await resolveRequestUserId(request, body.userId);
 
     const message = await createGatewayAIMessage({
       sessionId,
       role,
       content,
-      userId: body.userId,
+      userId,
       contentType: body.contentType,
       modelName: body.modelName,
       promptTokens: body.promptTokens,
@@ -81,6 +90,9 @@ export async function POST(
 
     return apiSuccess({ message }, 201);
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }

@@ -23,12 +23,18 @@ class ProblemPatternClassifier:
     def classify(self, *, problem_text: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         text = str(problem_text or "")
         templates = self._collect_templates(metadata)
+        vision_signals = (
+            metadata.get("vision_semantic_signals")
+            if isinstance(metadata.get("vision_semantic_signals"), dict)
+            else {}
+        )
 
         pattern = "static_proof"
         sub_pattern = "direct_relation_proof"
         presentation_mode = "relation_first"
         reasoning_mode = "deduction_first"
         confidence = 0.62
+        source = "rule_text_template"
 
         if self._SOLID_PATTERN.search(text):
             pattern = "solid_geometry_section"
@@ -72,6 +78,24 @@ class ProblemPatternClassifier:
         elif self._TRANSLATION_PATTERN.search(text):
             sub_pattern = "translation_transform"
 
+        signal_pattern = str(vision_signals.get("inferred_problem_pattern", "")).strip()
+        signal_sub_pattern = str(vision_signals.get("inferred_sub_pattern", "")).strip()
+        signal_confidence = float(vision_signals.get("confidence", 0.0) or 0.0)
+        if signal_pattern and signal_confidence >= 0.66:
+            pattern = signal_pattern
+            if signal_sub_pattern:
+                sub_pattern = signal_sub_pattern
+            presentation_mode, reasoning_mode = self._default_modes(pattern)
+            confidence = max(confidence, min(signal_confidence, 0.96))
+            source = "vision_semantic_signals"
+
+        requires_geometry_animation = bool(
+            vision_signals.get("needs_extra_geometry_animation", False)
+        ) or pattern == "fold_transform"
+        recommended_geometry_actions = self._normalize_actions(
+            vision_signals.get("recommended_geometry_actions")
+        )
+
         return {
             "pattern_version": "v1",
             "problem_pattern": pattern,
@@ -79,6 +103,9 @@ class ProblemPatternClassifier:
             "presentation_mode": presentation_mode,
             "reasoning_mode": reasoning_mode,
             "confidence": round(confidence, 2),
+            "requires_geometry_animation": requires_geometry_animation,
+            "recommended_geometry_actions": recommended_geometry_actions,
+            "source": source,
         }
 
     def _collect_templates(self, metadata: Dict[str, Any]) -> List[str]:
@@ -102,3 +129,27 @@ class ProblemPatternClassifier:
         if "面积" in text or "area" in lowered:
             return "fold_then_area"
         return "fold_transform_generic"
+
+    def _default_modes(self, pattern: str) -> tuple[str, str]:
+        mapping = {
+            "fold_transform": ("transformation_first", "invariant_then_auxiliary"),
+            "dynamic_point": ("motion_first", "constraint_then_locus"),
+            "circle_geometry": ("key_relation_first", "radius_tangent_then_similarity"),
+            "similarity_congruence": ("mapping_first", "construct_then_prove"),
+            "metric_computation": ("goal_first", "relation_then_compute"),
+            "solid_geometry_section": ("structure_first", "projection_then_relation"),
+        }
+        return mapping.get(str(pattern or "").strip(), ("relation_first", "deduction_first"))
+
+    def _normalize_actions(self, raw_actions: Any) -> List[str]:
+        if not isinstance(raw_actions, list):
+            return []
+        ordered: List[str] = []
+        seen = set()
+        for item in raw_actions:
+            action = str(item or "").strip()
+            if not action or action in seen:
+                continue
+            seen.add(action)
+            ordered.append(action)
+        return ordered

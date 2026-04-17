@@ -56,6 +56,7 @@ const OrchestratorState = Annotation.Root({
   thinkingConfig: Annotation<ThinkingConfig | null>,
   discussionContext: Annotation<{ topic: string; prompt?: string } | null>,
   triggerAgentId: Annotation<string | null>,
+  systemPromptAddendum: Annotation<string | null>,
   userProfile: Annotation<{ nickname?: string; bio?: string } | null>,
   /** Request-scoped agent configs for generated agents (not in the default registry) */
   agentConfigOverrides: Annotation<Record<string, AgentConfig>>,
@@ -288,6 +289,7 @@ async function runAgentGeneration(
     state.whiteboardLedger,
     state.userProfile || undefined,
     state.agentResponses,
+    state.systemPromptAddendum || undefined,
   );
   const openaiMessages = convertMessagesToOpenAI(state.messages, agentId);
   const adapter = new AISdkLangGraphAdapter(state.languageModel, state.thinkingConfig ?? undefined);
@@ -537,6 +539,7 @@ export function buildInitialState(
     thinkingConfig: thinkingConfig ?? null,
     discussionContext,
     triggerAgentId: request.config.triggerAgentId || null,
+    systemPromptAddendum: request.config.systemPromptAddendum?.trim() || null,
     userProfile: request.userProfile || null,
     agentConfigOverrides,
     currentAgentId: null,

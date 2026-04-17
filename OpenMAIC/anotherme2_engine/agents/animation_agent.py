@@ -77,8 +77,11 @@ class AnimationAgent(BaseAgent):
             "pixel_height": 1080,
             "pixel_width": 1920,
             "safe_margin": 0.4,
-            "left_panel_x_max": 1.0,
+            "left_panel_x_max": 0.75,
             "right_panel_x_min": 1.8,
+            "formula_max_visible_slots": 8,
+            "formula_math_font_size": 24,
+            "formula_text_font_size": 24,
         })
         self.layout = config.get("layout", "left_graph_right_formula")
         self.output_dir = Path(config.get("output_dir", str(DEFAULT_OUTPUT_DIR)))
@@ -89,6 +92,8 @@ class AnimationAgent(BaseAgent):
         self.template_retrieval_allow_full_scene_fallback = bool(
             config.get("template_retrieval_allow_full_scene_fallback", True)
         )
+        self.prefer_conservative_on_complex = bool(config.get("prefer_conservative_on_complex", False))
+        self.conservative_step_threshold = int(config.get("conservative_step_threshold", 6))
         self.export_incremental_codegen_debug = bool(
             config.get("export_incremental_codegen_debug", False)
         )
@@ -153,16 +158,18 @@ class AnimationAgent(BaseAgent):
 
     def _layout_step_canvas(self, canvas_scene: CanvasScene, plan: Dict[str, Any]) -> Dict[str, Any]:
         """根据 planner 输出给当前步骤分配公式区布局。"""
-        formula_items = plan.get("formula_items", []) # 从计划中获取当前步骤需要展示的公式列表
+        max_slots = max(1, int(self.canvas_config.get("formula_max_visible_slots", 8)))
+        formula_items = (plan.get("formula_items", []) or [])[:max_slots] # 从计划中获取当前步骤需要展示的公式列表
         reserved_elements = []
         forced_formula_reset = False
         if formula_items:
             # 调用分局器分配位置
+            requested_reset = True
             try:
                 reserved_elements = canvas_scene.reserve_step_formula_blocks(
                     step_id=plan["step_id"],
                     formula_items=formula_items,
-                    reset_formula_area=plan.get("reset_formula_area", False),
+                    reset_formula_area=requested_reset,
                 )
             except ValueError:
                 # 公式区不足时清空重排，保证当前步骤有可用布局
@@ -234,6 +241,8 @@ class AnimationAgent(BaseAgent):
             f"- 布局模式: {self.layout}\n"
             f"- 左侧图形区: x <= {cfg['left_panel_x_max']}，几何图形与点线标注都放左侧\n"
             f"- 右侧文字区: x >= {cfg['right_panel_x_min']}，可放公式和描述性文字\n"
+            f"- 右侧文字区一次最多显示 {int(cfg.get('formula_max_visible_slots', 8))} 条公式，且严格不重叠\n"
+            "- 右侧公式字号统一并适当减小，避免同屏公式大小不一致\n"
             "- 右侧文字区使用 VGroup(...).arrange(DOWN, aligned_edge=LEFT) 并固定在右侧，避免与图形重叠"
         )
 
@@ -322,11 +331,16 @@ class AnimationAgent(BaseAgent):
         if not has_points:
             return False
         primitives = drawable_scene.get("primitives") or []
-        return any(
-            isinstance(item, dict)
-            and str(item.get("type", "")).strip().lower() == "segment"
+        if any(
+            isinstance(item, dict) and str(item.get("type", "")).strip()
             for item in primitives
-        )
+        ):
+            return True
+        for bucket in ("lines", "objects", "angles", "circles", "arcs", "segments", "polygons"):
+            items = drawable_scene.get(bucket)
+            if isinstance(items, list) and bool(items):
+                return True
+        return False
 
     def _scene_point_ids(self, scene: Optional[Dict[str, Any]]) -> Set[str]:
         if not isinstance(scene, dict):
@@ -1081,7 +1095,13 @@ class AnimationAgent(BaseAgent):
         self._write_debug_json("problem_pattern.json", problem_pattern)
 
         drawable_scene_data = metadata.get("drawable_scene")
-        drawable_scene_presentable = self._has_drawable_geometry(drawable_scene_data)
+        coordinate_scene_data = metadata.get("coordinate_scene")
+        animation_scene_data = (
+            coordinate_scene_data
+            if isinstance(coordinate_scene_data, dict) and self._has_drawable_geometry(coordinate_scene_data)
+            else drawable_scene_data
+        )
+        drawable_scene_presentable = self._has_drawable_geometry(animation_scene_data)
         if not drawable_scene_presentable:
             return self._fail_with_geometry_error(
                 state,
@@ -1122,7 +1142,7 @@ class AnimationAgent(BaseAgent):
             formal_candidate = self._build_template_candidate(
                 project=project,
                 steps=script_steps,
-                coordinate_scene_data=drawable_scene_data,
+                coordinate_scene_data=animation_scene_data,
                 teaching_ir=teaching_ir,
                 expected_steps=expected_steps,
                 conservative=False,
@@ -1131,7 +1151,7 @@ class AnimationAgent(BaseAgent):
             conservative_candidate = self._build_template_candidate(
                 project=project,
                 steps=script_steps,
-                coordinate_scene_data=drawable_scene_data,
+                coordinate_scene_data=animation_scene_data,
                 teaching_ir=teaching_ir,
                 expected_steps=expected_steps,
                 conservative=True,
@@ -1163,12 +1183,12 @@ class AnimationAgent(BaseAgent):
         if not retrieval_contexts:
             retrieval_contexts = self._prepare_animation_context(
                 script_steps,
-                drawable_scene_data,
+                animation_scene_data,
                 teaching_ir=teaching_ir,
             )
             self._attach_animation_specs(
                 retrieval_contexts,
-                base_coordinate_scene=drawable_scene_data,
+                base_coordinate_scene=animation_scene_data,
                 conservative=False,
                 adaptive_plan=adaptive_plan,
             )
@@ -1199,7 +1219,17 @@ class AnimationAgent(BaseAgent):
                 expected_steps=expected_steps,
             )
 
-        selected = formal_candidate if formal_candidate["ok"] else conservative_candidate
+        prefer_conservative = (
+            self.prefer_conservative_on_complex
+            and self.conservative_step_threshold > 0
+            and len(script_steps) >= self.conservative_step_threshold
+        )
+
+        if prefer_conservative and conservative_candidate["ok"]:
+            selected = conservative_candidate
+        else:
+            selected = formal_candidate if formal_candidate["ok"] else conservative_candidate
+
         if not selected["ok"] and llm_fallback_candidate["ok"]:
             selected = llm_fallback_candidate
         if not selected["ok"]:
@@ -1255,6 +1285,7 @@ class AnimationAgent(BaseAgent):
             "formal_validation.json",
             {
                 "selected_mode": codegen_mode,
+                "prefer_conservative": prefer_conservative,
                 "selected_report": validation_report,
                 "candidates": {
                     "formal": {
@@ -1347,7 +1378,7 @@ class AnimationAgent(BaseAgent):
         coordinate_scene_data: Optional[Dict[str, Any]],
         teaching_ir: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        canvas_scene = CanvasScene()
+        canvas_scene = CanvasScene(max_formula_slots=max(1, int(self.canvas_config.get("formula_max_visible_slots", 8))))
         contexts: List[Dict[str, Any]] = []
         cumulative = 0.0
         running_scene = self._build_animation_base_scene(coordinate_scene_data)
@@ -1396,7 +1427,7 @@ class AnimationAgent(BaseAgent):
         conservative: bool,
         adaptive_plan: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-        canvas_scene = CanvasScene()
+        canvas_scene = CanvasScene(max_formula_slots=max(1, int(self.canvas_config.get("formula_max_visible_slots", 8))))
         cumulative = 0.0
         contexts: List[Dict[str, Any]] = []
         snapshots: List[Dict[str, Any]] = []

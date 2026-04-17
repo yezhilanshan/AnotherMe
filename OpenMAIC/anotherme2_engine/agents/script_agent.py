@@ -34,7 +34,14 @@ class ScriptAgent(BaseAgent):
                     "kind": "description",
                     "target_area": "formula_area"
                 }
-            ]
+            ],
+            "spoken_formulas": ["AB=BC"],
+            "visible_segments": ["AB", "BC", "DE"],
+            "required_actions": [
+                {"type": "show_segment", "target": "DE"},
+                {"type": "highlight_segment", "target": "DE"}
+            ],
+            "animation_policy": "auto"
         }
     ],
     "total_duration": 30.0
@@ -122,7 +129,10 @@ Geometry Graph（节点/边关系图，辅助约束）：
 3) on_screen_texts 中允许描述性文字，不仅是公式。
 4) target_area 可用值：formula_area、geometry_area；默认使用 formula_area。
 5) on_screen_texts 每步建议 1-3 条，单条尽量简洁。
-6) 不要发明题图中不存在的新点、新线、新圆或新辅助对象；若确实需要构造新对象，必须在 narration 和 visual_cues 中明确写出“作.../构造...”。"""
+    6) 不要发明题图中不存在的新点、新线、新圆或新辅助对象；若确实需要构造新对象，必须在 narration 和 visual_cues 中明确写出“作.../构造...”。
+    7) spoken_formulas 要覆盖本步音频里提到且应上屏的公式（可为空数组）。
+    8) visible_segments 只写当前步骤允许显示的线段（如 AB、DE；可为空数组）。
+    9) required_actions 是本步必须执行的几何动作（可为空数组）；animation_policy 可选 auto/required/none。"""
 
         # 调用 LLM
         messages = self._format_messages(
@@ -139,6 +149,21 @@ Geometry Graph（节点/边关系图，辅助约束）：
         script_steps = []
         for step_data in script_data.get("steps", []):
             on_screen_texts = self._normalize_on_screen_texts(step_data.get("on_screen_texts", []))
+            spoken_formulas = self._normalize_spoken_formulas(
+                step_data.get("spoken_formulas", []),
+                on_screen_texts=on_screen_texts,
+                narration=step_data.get("narration", ""),
+                visual_cues=step_data.get("visual_cues", []),
+                title=step_data.get("title", ""),
+            )
+            visible_segments = self._normalize_visible_segments(
+                step_data.get("visible_segments", []),
+                narration=step_data.get("narration", ""),
+                visual_cues=step_data.get("visual_cues", []),
+                title=step_data.get("title", ""),
+            )
+            required_actions = self._normalize_required_actions(step_data.get("required_actions", []))
+            animation_policy = self._normalize_animation_policy(step_data.get("animation_policy", "auto"))
             step = ScriptStep(
                 id=step_data["id"],
                 title=step_data["title"],
@@ -146,6 +171,10 @@ Geometry Graph（节点/边关系图，辅助约束）：
                 narration=step_data["narration"],
                 visual_cues=step_data.get("visual_cues", []),
                 on_screen_texts=on_screen_texts,
+                spoken_formulas=spoken_formulas,
+                visible_segments=visible_segments,
+                required_actions=required_actions,
+                animation_policy=animation_policy,
             )
             script_steps.append(step)
 
@@ -308,3 +337,155 @@ Geometry Graph（节点/边关系图，辅助约束）：
                         entity_ids.add(str(item.get("id")))
 
         return sorted(item for item in entity_ids if item)
+
+    def _normalize_spoken_formulas(
+        self,
+        value: Any,
+        *,
+        on_screen_texts: List[Dict[str, str]],
+        narration: Any,
+        visual_cues: Any,
+        title: Any,
+    ) -> List[str]:
+        candidates: List[str] = []
+
+        if isinstance(value, str):
+            token = value.strip()
+            if token:
+                candidates.append(token)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    token = str(item.get("latex") or item.get("text") or "").strip()
+                else:
+                    token = str(item).strip()
+                if token:
+                    candidates.append(token)
+
+        for item in on_screen_texts:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("target_area", "formula_area")).strip() != "formula_area":
+                continue
+            token = str(item.get("text", "")).strip()
+            if token and self._looks_like_formula(token):
+                candidates.append(token)
+
+        texts = [str(title or ""), str(narration or "")]
+        texts.extend(str(cue or "") for cue in (visual_cues or []))
+        for text in texts:
+            candidates.extend(self._extract_formula_candidates_from_text(text))
+
+        return self._dedupe_preserve_order(candidates)[:6]
+
+    def _normalize_visible_segments(
+        self,
+        value: Any,
+        *,
+        narration: Any,
+        visual_cues: Any,
+        title: Any,
+    ) -> List[str]:
+        tokens: List[str] = []
+
+        if isinstance(value, str):
+            tokens.extend(re.split(r"[\s,，;；|/]+", value))
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    token = str(item.get("segment") or item.get("target") or "").strip()
+                    if token:
+                        tokens.append(token)
+                else:
+                    token = str(item).strip()
+                    if token:
+                        tokens.append(token)
+
+        text_blob = " ".join(
+            [str(title or ""), str(narration or ""), " ".join(str(cue or "") for cue in (visual_cues or []))]
+        )
+        # 避免把“3 cm”中的单位误识别成线段（如 CM）。
+        for match in re.findall(
+            r"(?<!\d\s)(?<![A-Za-z0-9_'])([A-Za-z]\d*['′]?\s*[A-Za-z]\d*['′]?)(?![A-Za-z0-9_'])",
+            text_blob,
+        ):
+            tokens.append(match)
+
+        normalized: List[str] = []
+        for token in tokens:
+            segment = self._normalize_segment_token(token)
+            if segment:
+                normalized.append(segment)
+        return self._dedupe_preserve_order(normalized)[:10]
+
+    def _normalize_required_actions(self, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            action_type = str(item.get("type") or item.get("action") or "").strip()
+            if not action_type:
+                continue
+            payload: Dict[str, Any] = {"type": action_type}
+            target = item.get("target")
+            targets = item.get("targets")
+            if target is not None:
+                payload["target"] = target
+            if isinstance(targets, list):
+                payload["targets"] = targets
+            for key in ("axis", "from", "to", "to_line", "params", "at"):
+                if key in item:
+                    payload[key] = item[key]
+            normalized.append(payload)
+        return normalized[:8]
+
+    def _normalize_animation_policy(self, value: Any) -> str:
+        token = str(value or "auto").strip().lower()
+        if token in {"auto", "required", "none"}:
+            return token
+        return "auto"
+
+    def _extract_formula_candidates_from_text(self, text: str) -> List[str]:
+        if not text:
+            return []
+        patterns = [
+            re.compile(r"[A-Za-z0-9'()\^²√+\-=/×·<>]{2,}\s*=\s*[A-Za-z0-9'()\^²√+\-=/×·<>]{1,}"),
+            re.compile(r"\\?[A-Za-z]+\s*=\s*\\?[A-Za-z0-9]+"),
+        ]
+        results: List[str] = []
+        for pattern in patterns:
+            results.extend(match.strip(" ，。；：,. ") for match in pattern.findall(text))
+        return [item for item in results if self._looks_like_formula(item)]
+
+    def _looks_like_formula(self, text: str) -> bool:
+        token = str(text or "").strip()
+        if not token:
+            return False
+        return any(symbol in token for symbol in ["=", "+", "-", "√", "²", "×", "/", "^", "∠", "∥", "⊥"])
+
+    def _normalize_segment_token(self, token: Any) -> str:
+        raw = str(token or "").strip()
+        if not raw:
+            return ""
+        if raw.lower().startswith("seg_"):
+            raw = raw[4:]
+        raw = raw.replace("′", "1").replace("'", "1").replace(" ", "")
+        refs = re.findall(r"[A-Za-z]\d*", raw)
+        if len(refs) == 2:
+            a, b = refs[0].upper(), refs[1].upper()
+            return "".join(sorted([a, b]))
+        return ""
+
+    def _dedupe_preserve_order(self, values: List[str]) -> List[str]:
+        seen = set()
+        result: List[str] = []
+        for item in values:
+            token = str(item or "").strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            result.append(token)
+        return result

@@ -98,6 +98,7 @@ def create_workflow(
 
 def create_default_workflow(llm_config: Dict[str, Any],
                             vision_llm_config: Optional[Dict[str, Any]] = None,
+                            ocr_llm_config: Optional[Dict[str, Any]] = None,
                             output_dir: str = str(DEFAULT_OUTPUT_DIR),
                             export_ggb: bool = True) -> Any:
     """
@@ -110,6 +111,8 @@ def create_default_workflow(llm_config: Dict[str, Any],
 
     if vision_llm_config is None:
         vision_llm_config = llm_config
+    if ocr_llm_config is None:
+        ocr_llm_config = vision_llm_config
 
     latex_ready = _detect_latex_support()
 
@@ -137,7 +140,12 @@ def create_default_workflow(llm_config: Dict[str, Any],
             **vision_llm_config,
             "max_retries": 5,
             "retry_backoff_seconds": 10.0,
-        }
+        },
+        ocr_llm_config={
+            **ocr_llm_config,
+            "max_retries": 5,
+            "retry_backoff_seconds": 10.0,
+        },
     )
 
     # VisionAgent 使用视觉模型直接生成 OCR 与 Scene Graph
@@ -147,6 +155,13 @@ def create_default_workflow(llm_config: Dict[str, Any],
         model=vision_llm_config.get("model", ""),
         temperature=vision_llm_config.get("temperature", 0.05),
         model_kwargs={"max_tokens": vision_llm_config.get("max_tokens", 4096)},
+    )
+    ocr_vision_llm = chat_openai_cls(
+        api_key=ocr_llm_config.get("api_key", ""),
+        base_url=ocr_llm_config.get("base_url", ""),
+        model=ocr_llm_config.get("model", ""),
+        temperature=ocr_llm_config.get("temperature", 0.0),
+        model_kwargs={"max_tokens": ocr_llm_config.get("max_tokens", 4096)},
     )
 
     vision_agent = VisionAgent(
@@ -158,6 +173,7 @@ def create_default_workflow(llm_config: Dict[str, Any],
             "retry_backoff_seconds": 10.0,
         },
         llm=vision_llm,
+        ocr_llm=ocr_vision_llm,
     )
 
     # 创建智能体 - 都注入 vision_tool，可以按需调用
@@ -181,8 +197,8 @@ def create_default_workflow(llm_config: Dict[str, Any],
             "canvas_config": {
                 **MANIM_CANVAS_CONFIG,
                 "prefer_mathtex": latex_ready,
-                "formula_math_font_size": 28,
-                "formula_text_font_size": 28,
+                "formula_math_font_size": 24,
+                "formula_text_font_size": 24,
             },
             "layout": "left_graph_right_formula",
             "output_dir": output_dir,

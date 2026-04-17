@@ -1,13 +1,35 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { Send, Bot, Sparkles, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Bot,
+  History,
+  Loader2,
+  MessageSquareText,
+  Pencil,
+  Plus,
+  Send,
+  Sparkles,
+  Trash2,
+} from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 
 type TutorMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+};
+
+type TutorSession = {
+  id: string;
+  title: string;
+  autoTitle: boolean;
+  createdAt: string;
+  updatedAt: string;
+  messages: TutorMessage[];
 };
 
 type ChatApiEvent = {
@@ -20,6 +42,23 @@ type ChatRequestMessage = {
   role: 'user' | 'assistant';
   parts: Array<{ type: 'text'; text: string }>;
 };
+
+const STORAGE_KEY = 'openmaic:ai-tutor:sessions:v1';
+const MAX_SESSIONS = 40;
+
+const QUICK_ACTIONS = [
+  '解释更详细一点',
+  '换一种解法',
+  '出几道同类题',
+  '总结本题关键公式',
+];
+
+const AI_TUTOR_DETAILED_SYSTEM_PROMPT = `从现在开始，你是我的详细型AI导师。请默认使用“深入讲解模式”回答：
+- 每次先给结论，再讲原理，再给例子，再给常见错误，再给练习题
+- 回答尽量详细，除非我明确说“简短”
+- 关键概念要解释定义、用途、边界条件和对比项
+- 遇到步骤题要分步骤，不要跳步
+- 每次结尾加“你可以继续问我的3个问题”`;
 
 function parseSSEChunk(buffer: string) {
   const events: string[] = [];
@@ -45,14 +84,121 @@ async function parseApiError(response: Response) {
   }
 }
 
+function sessionId() {
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createSession(): TutorSession {
+  const now = new Date().toISOString();
+  return {
+    id: sessionId(),
+    title: '新会话',
+    autoTitle: true,
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  };
+}
+
+function deriveSessionTitle(messages: TutorMessage[]): string {
+  const firstUser = messages.find((item) => item.role === 'user' && item.content.trim());
+  if (!firstUser) return '新会话';
+  const normalized = firstUser.content.replace(/\s+/g, ' ').trim();
+  return normalized.length > 20 ? `${normalized.slice(0, 20)}...` : normalized;
+}
+
+function safeParseSessions(raw: string | null): TutorSession[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as TutorSession[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item && typeof item.id === 'string' && Array.isArray(item.messages))
+      .map((item) => ({
+        id: item.id,
+        title: typeof item.title === 'string' && item.title.trim() ? item.title : '新会话',
+        autoTitle: Boolean(item.autoTitle),
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.updatedAt || item.createdAt || new Date().toISOString(),
+        messages: item.messages
+          .filter((msg) => msg && typeof msg.id === 'string')
+          .map((msg) => ({
+            id: msg.id,
+            role: msg.role === 'assistant' ? 'assistant' : 'user',
+            content: typeof msg.content === 'string' ? msg.content : '',
+          })),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function formatSessionTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export default function AITutorPage() {
-  const [messages, setMessages] = useState<TutorMessage[]>([]);
+  const [sessions, setSessions] = useState<TutorSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState('');
+  const [hydrated, setHydrated] = useState(false);
+
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [errorText, setErrorText] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const orderedSessions = useMemo(
+    () => [...sessions].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)),
+    [sessions],
+  );
+
+  const activeSession = useMemo(
+    () => sessions.find((item) => item.id === activeSessionId) || null,
+    [sessions, activeSessionId],
+  );
+
+  const messages = useMemo(() => activeSession?.messages || [], [activeSession]);
+
+  useEffect(() => {
+    const savedSessions = safeParseSessions(localStorage.getItem(STORAGE_KEY));
+    if (savedSessions.length > 0) {
+      const sorted = [...savedSessions].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+      setSessions(sorted.slice(0, MAX_SESSIONS));
+      setActiveSessionId(sorted[0].id);
+      setHydrated(true);
+      return;
+    }
+
+    const initial = createSession();
+    setSessions([initial]);
+    setActiveSessionId(initial.id);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  }, [hydrated, sessions]);
+
+  useEffect(() => {
+    if (!activeSessionId && orderedSessions[0]?.id) {
+      setActiveSessionId(orderedSessions[0].id);
+      return;
+    }
+
+    if (activeSessionId && !sessions.some((item) => item.id === activeSessionId)) {
+      setActiveSessionId(orderedSessions[0]?.id || '');
+    }
+  }, [activeSessionId, orderedSessions, sessions]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -64,6 +210,25 @@ export default function AITutorPage() {
     };
   }, []);
 
+  const updateSessionMessages = useCallback(
+    (targetSessionId: string, updater: (prev: TutorMessage[]) => TutorMessage[]) => {
+      setSessions((prev) =>
+        prev.map((session) => {
+          if (session.id !== targetSessionId) return session;
+          const nextMessages = updater(session.messages);
+          const nextTitle = session.autoTitle ? deriveSessionTitle(nextMessages) : session.title;
+          return {
+            ...session,
+            messages: nextMessages,
+            title: nextTitle || '新会话',
+            updatedAt: new Date().toISOString(),
+          };
+        }),
+      );
+    },
+    [],
+  );
+
   const toRequestMessages = (list: TutorMessage[]): ChatRequestMessage[] => {
     return list.map((item) => ({
       id: item.id,
@@ -72,16 +237,77 @@ export default function AITutorPage() {
     }));
   };
 
+  const handleNewSession = () => {
+    if (isTyping) return;
+    abortControllerRef.current?.abort();
+    const next = createSession();
+    setSessions((prev) => [next, ...prev].slice(0, MAX_SESSIONS));
+    setActiveSessionId(next.id);
+    setErrorText('');
+    setInput('');
+  };
+
+  const handleRenameSession = () => {
+    if (!activeSession || isTyping) return;
+    const nextTitle = window.prompt('请输入新标题', activeSession.title)?.trim();
+    if (!nextTitle) return;
+
+    setSessions((prev) =>
+      prev.map((session) =>
+        session.id === activeSession.id
+          ? {
+              ...session,
+              title: nextTitle,
+              autoTitle: false,
+              updatedAt: new Date().toISOString(),
+            }
+          : session,
+      ),
+    );
+  };
+
+  const handleClearCurrent = () => {
+    if (!activeSession || isTyping) return;
+    if (!window.confirm('确定清空当前会话记录吗？')) return;
+
+    setSessions((prev) =>
+      prev.map((session) =>
+        session.id === activeSession.id
+          ? {
+              ...session,
+              messages: [],
+              autoTitle: true,
+              title: '新会话',
+              updatedAt: new Date().toISOString(),
+            }
+          : session,
+      ),
+    );
+    setErrorText('');
+  };
+
+  const handleClearAll = () => {
+    if (isTyping) return;
+    if (!window.confirm('确定清空全部历史会话吗？')) return;
+    abortControllerRef.current?.abort();
+
+    const fresh = createSession();
+    setSessions([fresh]);
+    setActiveSessionId(fresh.id);
+    setInput('');
+    setErrorText('');
+  };
+
   const handleSend = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || isTyping) return;
+    if (!trimmed || isTyping || !activeSession) return;
 
+    const targetSessionId = activeSession.id;
     const userMessage: TutorMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
       content: trimmed,
     };
-
     const assistantId = `assistant-${Date.now() + 1}`;
     const assistantPlaceholder: TutorMessage = {
       id: assistantId,
@@ -89,8 +315,8 @@ export default function AITutorPage() {
       content: '',
     };
 
-    const nextMessages = [...messages, userMessage, assistantPlaceholder];
-    setMessages(nextMessages);
+    const snapshotMessages = [...activeSession.messages, userMessage, assistantPlaceholder];
+    updateSessionMessages(targetSessionId, () => snapshotMessages);
     setInput('');
     setIsTyping(true);
     setErrorText('');
@@ -99,9 +325,49 @@ export default function AITutorPage() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    let assistantContent = '';
+    const deltaQueue: string[] = [];
+
+    const renderAssistant = () => {
+      updateSessionMessages(targetSessionId, (prev) =>
+        prev.map((msg) => (msg.id === assistantId ? { ...msg, content: assistantContent } : msg)),
+      );
+    };
+
+    const flushDelta = (budget = 2) => {
+      let remaining = budget;
+      let changed = false;
+      while (remaining > 0 && deltaQueue.length > 0) {
+        const chunk = deltaQueue[0];
+        if (!chunk) {
+          deltaQueue.shift();
+          continue;
+        }
+
+        const take = Math.min(remaining, chunk.length);
+        assistantContent += chunk.slice(0, take);
+        remaining -= take;
+        changed = true;
+
+        if (take >= chunk.length) {
+          deltaQueue.shift();
+        } else {
+          deltaQueue[0] = chunk.slice(take);
+        }
+      }
+
+      if (changed) {
+        renderAssistant();
+      }
+      return changed;
+    };
+
+    const streamTimer = window.setInterval(() => {
+      flushDelta(2);
+    }, 18);
+
     try {
       const modelConfig = getCurrentModelConfig();
-
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -109,7 +375,7 @@ export default function AITutorPage() {
         },
         signal: controller.signal,
         body: JSON.stringify({
-          messages: toRequestMessages(nextMessages.slice(0, -1)),
+          messages: toRequestMessages(snapshotMessages.slice(0, -1)),
           storeState: {
             stage: null,
             scenes: [],
@@ -120,6 +386,7 @@ export default function AITutorPage() {
           config: {
             agentIds: ['default-1'],
             sessionType: 'qa',
+            systemPromptAddendum: AI_TUTOR_DETAILED_SYSTEM_PROMPT,
           },
           apiKey: modelConfig.apiKey || '',
           baseUrl: modelConfig.baseUrl || undefined,
@@ -141,7 +408,6 @@ export default function AITutorPage() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let rawBuffer = '';
-      let assistantContent = '';
 
       const processEventBlocks = (blocks: string[]) => {
         for (const block of blocks) {
@@ -163,19 +429,24 @@ export default function AITutorPage() {
 
             if (event.type === 'text_delta') {
               const delta = typeof event.data?.content === 'string' ? event.data.content : '';
-              if (!delta) continue;
-              assistantContent += delta;
-              setMessages((prev) =>
-                prev.map((msg) => (msg.id === assistantId ? { ...msg, content: assistantContent } : msg)),
-              );
+              if (delta) {
+                deltaQueue.push(delta);
+              }
             }
 
             if (event.type === 'text_end') {
-              const fullText = typeof event.data?.content === 'string' ? event.data.content : assistantContent;
-              assistantContent = fullText;
-              setMessages((prev) =>
-                prev.map((msg) => (msg.id === assistantId ? { ...msg, content: fullText } : msg)),
-              );
+              const fullText = typeof event.data?.content === 'string' ? event.data.content : '';
+              if (fullText) {
+                const pendingText = `${assistantContent}${deltaQueue.join('')}`;
+                if (fullText.startsWith(pendingText)) {
+                  const tail = fullText.slice(pendingText.length);
+                  if (tail) deltaQueue.push(tail);
+                } else {
+                  deltaQueue.length = 0;
+                  assistantContent = fullText;
+                  renderAssistant();
+                }
+              }
             }
 
             if (event.type === 'error') {
@@ -201,134 +472,298 @@ export default function AITutorPage() {
       const tailParsed = parseSSEChunk(rawBuffer);
       processEventBlocks(tailParsed.events);
 
+      while (flushDelta(9999)) {
+        // flush all remaining queued chars
+      }
+
       if (!assistantContent.trim()) {
-        setMessages((prev) =>
+        assistantContent = '收到请求，但当前没有返回文本结果。请检查模型配置后重试。';
+        renderAssistant();
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        // switched session or new request; ignore aborted errors
+      } else {
+        setErrorText(error instanceof Error ? error.message : 'AI 导师请求失败。');
+        updateSessionMessages(targetSessionId, (prev) =>
           prev.map((msg) =>
             msg.id === assistantId
               ? {
                   ...msg,
-                  content: '收到请求，但当前没有返回文本结果。请检查模型配置后重试。',
+                  content: '请求失败，请检查后端模型配置是否可用。',
                 }
               : msg,
           ),
         );
       }
-    } catch (error) {
-      setErrorText(error instanceof Error ? error.message : 'AI 导师请求失败。');
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantId
-            ? {
-                ...msg,
-                content: '请求失败，请检查后端模型配置是否可用。',
-              }
-            : msg,
-        ),
-      );
     } finally {
+      window.clearInterval(streamTimer);
       setIsTyping(false);
     }
   };
 
+  if (!hydrated || !activeSession) {
+    return (
+      <div className="h-[calc(100vh-8rem)] flex items-center justify-center text-gray-500">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        正在初始化 AI 导师...
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-5xl mx-auto h-[calc(100vh-8rem)] flex flex-col bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-      <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0 bg-white z-10">
-        <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-black flex items-center justify-center text-white">
-            <Bot className="h-5 w-5" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-gray-900">AI 专属导师</h2>
-            <p className="text-[10px] text-gray-500 font-medium">已接入真实后端流式对话服务 /api/chat</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6 scroll-smooth bg-[#FAFAFA]">
-        {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto">
-            <div className="h-16 w-16 bg-black rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg">
-              <Bot className="h-8 w-8" />
+    <div className="max-w-6xl mx-auto h-[calc(100vh-8rem)] flex bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <aside className="w-72 border-r border-gray-100 bg-[#FAFAFA] flex flex-col">
+        <div className="px-4 py-4 border-b border-gray-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-gray-800">
+              <History className="h-4 w-4" />
+              <span className="text-sm font-bold">历史对话</span>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">今天想学习什么数学知识？</h1>
-            <p className="text-sm text-gray-500 mb-12 text-center">你发出的每条问题都会调用真实后端，并返回流式回答。</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-              {['帮我复习二次函数', '解释一下勾股定理', '出一道相似三角形练习题', '如何提高解题速度'].map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => handleSend(suggestion)}
-                  className="flex items-center gap-3 p-4 bg-white border border-gray-200 rounded-xl hover:border-gray-300 text-left"
-                >
-                  <div className="h-8 w-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500">
-                    <Sparkles className="h-4 w-4" />
-                  </div>
-                  <span className="text-sm font-medium text-gray-700">{suggestion}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="max-w-3xl mx-auto space-y-8 pb-4">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                <div className="shrink-0 mt-1">
-                  {msg.role === 'user' ? (
-                    <div className="h-8 w-8 rounded-full bg-gray-200 border border-gray-100 flex items-center justify-center text-xs font-bold text-gray-700">你</div>
-                  ) : (
-                    <div className="h-8 w-8 rounded-lg bg-black flex items-center justify-center text-white shadow-sm">
-                      <Bot className="h-5 w-5" />
-                    </div>
-                  )}
-                </div>
-                <div className={`max-w-[80%] text-[15px] leading-relaxed ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                  <div className="font-bold text-xs text-gray-400 mb-1.5 uppercase tracking-wide">
-                    {msg.role === 'user' ? '你' : 'AI 导师'}
-                  </div>
-                  <div className={`inline-block px-5 py-3.5 shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-[#111827] text-white rounded-2xl rounded-tr-sm' : 'bg-white text-gray-800 rounded-2xl rounded-tl-sm border border-gray-100'}`}>
-                    {msg.content || (isTyping && msg.role === 'assistant' ? '思考中...' : '')}
-                  </div>
-                </div>
-              </div>
-            ))}
-            {isTyping ? (
-              <div className="flex gap-2 items-center text-gray-500 text-sm">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                正在接收流式回复...
-              </div>
-            ) : null}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
-      </div>
-
-      <div className="p-4 bg-white border-t border-gray-100 shrink-0">
-        {errorText ? <p className="text-xs text-red-600 mb-2">{errorText}</p> : null}
-        <div className="max-w-3xl mx-auto relative">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                handleSend(input);
-              }
-            }}
-            placeholder="输入你的数学问题..."
-            className="w-full bg-[#F4F3F0] border-none pl-4 pr-14 py-4 rounded-xl text-[15px] outline-none placeholder:text-gray-400"
-          />
-          <div className="absolute right-3 top-1/2 -translate-y-1/2">
             <button
               type="button"
-              onClick={() => handleSend(input)}
-              disabled={!input.trim() || isTyping}
-              className="p-2 bg-black text-white hover:bg-gray-800 disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors"
+              disabled={isTyping}
+              onClick={handleNewSession}
+              className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-md bg-black text-white disabled:bg-gray-300"
             >
-              <Send className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
+              新建
+            </button>
+          </div>
+          <button
+            type="button"
+            disabled={isTyping}
+            onClick={handleClearAll}
+            className="mt-2 text-xs text-gray-500 hover:text-gray-800 disabled:text-gray-300"
+          >
+            清空全部历史
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {orderedSessions.map((session) => {
+            const active = session.id === activeSessionId;
+            return (
+              <button
+                key={session.id}
+                type="button"
+                disabled={isTyping}
+                onClick={() => setActiveSessionId(session.id)}
+                className={`w-full text-left px-4 py-3 border-b border-gray-100 transition-colors disabled:cursor-not-allowed ${
+                  active ? 'bg-white' : 'hover:bg-white/70'
+                }`}
+              >
+                <p className="text-sm font-semibold text-gray-900 truncate">{session.title}</p>
+                <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-2">
+                  <MessageSquareText className="h-3 w-3" />
+                  {session.messages.length} 条消息
+                </p>
+                <p className="text-[11px] text-gray-400 mt-1">{formatSessionTime(session.updatedAt)}</p>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <section className="flex-1 flex flex-col min-w-0">
+        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 shrink-0 bg-white z-10">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-8 w-8 rounded-lg bg-black flex items-center justify-center text-white shrink-0">
+              <Bot className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-gray-900 truncate">{activeSession.title}</h2>
+              <p className="text-[10px] text-gray-500 font-medium">Markdown / LaTeX / 流式回复已开启</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isTyping}
+              onClick={handleRenameSession}
+              className="p-2 rounded-md hover:bg-gray-100 disabled:opacity-50"
+              title="重命名会话"
+              aria-label="重命名会话"
+            >
+              <Pencil className="h-4 w-4 text-gray-600" />
+            </button>
+            <button
+              type="button"
+              disabled={isTyping}
+              onClick={handleClearCurrent}
+              className="p-2 rounded-md hover:bg-gray-100 disabled:opacity-50"
+              title="清空当前会话"
+              aria-label="清空当前会话"
+            >
+              <Trash2 className="h-4 w-4 text-gray-600" />
             </button>
           </div>
         </div>
-      </div>
+
+        <div className="flex-1 overflow-y-auto p-6 scroll-smooth bg-[#FAFAFA]">
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto">
+              <div className="h-16 w-16 bg-black rounded-2xl flex items-center justify-center text-white mb-6 shadow-lg">
+                <Bot className="h-8 w-8" />
+              </div>
+              <h1 className="text-2xl font-bold text-gray-900 mb-2">今天想学习什么数学知识？</h1>
+              <p className="text-sm text-gray-500 mb-12 text-center">
+                支持 Markdown 与 LaTeX 数学公式，回复会以流式逐字呈现。
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                {[
+                  '帮我复习二次函数',
+                  '解释一下勾股定理并给出公式推导',
+                  '出一道相似三角形练习题并附答案',
+                  '如何提高解题速度',
+                ].map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => {
+                      void handleSend(suggestion);
+                    }}
+                    disabled={isTyping}
+                    className="flex items-center gap-3 p-4 bg-white border border-gray-200 rounded-xl hover:border-gray-300 text-left disabled:opacity-60"
+                  >
+                    <div className="h-8 w-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-500 shrink-0">
+                      <Sparkles className="h-4 w-4" />
+                    </div>
+                    <span className="text-sm font-medium text-gray-700">{suggestion}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="max-w-4xl mx-auto space-y-8 pb-4">
+              {messages.map((msg) => (
+                <div key={msg.id} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                  <div className="shrink-0 mt-1">
+                    {msg.role === 'user' ? (
+                      <div className="h-8 w-8 rounded-full bg-gray-200 border border-gray-100 flex items-center justify-center text-xs font-bold text-gray-700">
+                        你
+                      </div>
+                    ) : (
+                      <div className="h-8 w-8 rounded-lg bg-black flex items-center justify-center text-white shadow-sm">
+                        <Bot className="h-5 w-5" />
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    className={`max-w-[85%] text-[15px] leading-relaxed ${
+                      msg.role === 'user' ? 'text-right' : 'text-left'
+                    }`}
+                  >
+                    <div className="font-bold text-xs text-gray-400 mb-1.5 uppercase tracking-wide">
+                      {msg.role === 'user' ? '你' : 'AI 导师'}
+                    </div>
+                    <div
+                      className={`inline-block px-5 py-3.5 shadow-sm ${
+                        msg.role === 'user'
+                          ? 'bg-[#111827] text-white rounded-2xl rounded-tr-sm whitespace-pre-wrap'
+                          : 'bg-white text-gray-800 rounded-2xl rounded-tl-sm border border-gray-100'
+                      }`}
+                    >
+                      {msg.role === 'assistant' ? (
+                        <div className="ai-tutor-markdown">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                              ul: ({ children }) => <ul className="list-disc pl-5 mb-2">{children}</ul>,
+                              ol: ({ children }) => <ol className="list-decimal pl-5 mb-2">{children}</ol>,
+                              li: ({ children }) => <li className="mb-1">{children}</li>,
+                              code: ({ children, className, ...props }) => {
+                                if (!className) {
+                                  return (
+                                    <code className="px-1 py-0.5 rounded bg-gray-100 text-gray-800" {...props}>
+                                      {children}
+                                    </code>
+                                  );
+                                }
+                                return (
+                                  <pre className="overflow-x-auto bg-gray-900 text-gray-100 rounded-md p-3 my-2">
+                                    <code className={className} {...props}>
+                                      {children}
+                                    </code>
+                                  </pre>
+                                );
+                              },
+                            }}
+                          >
+                            {msg.content || (isTyping ? '思考中...' : '')}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        msg.content
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {isTyping ? (
+                <div className="flex gap-2 items-center text-gray-500 text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  正在流式输出...
+                </div>
+              ) : null}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 bg-white border-t border-gray-100 shrink-0">
+          {errorText ? <p className="text-xs text-red-600 mb-2">{errorText}</p> : null}
+
+          <div className="max-w-4xl mx-auto">
+            <div className="flex flex-wrap gap-2 mb-2">
+              {QUICK_ACTIONS.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  disabled={isTyping}
+                  onClick={() => {
+                    void handleSend(item);
+                  }}
+                  className="px-3 py-1.5 text-xs rounded-full border border-gray-200 bg-[#F9F9F8] hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+
+            <div className="relative">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                    void handleSend(input);
+                  }
+                }}
+                placeholder="输入你的数学问题（支持让 AI 输出公式推导）..."
+                className="w-full bg-[#F4F3F0] border-none pl-4 pr-14 py-4 rounded-xl text-[15px] outline-none placeholder:text-gray-400"
+              />
+              <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleSend(input);
+                  }}
+                  disabled={!input.trim() || isTyping}
+                  className="p-2 bg-black text-white hover:bg-gray-800 disabled:bg-gray-300 disabled:text-gray-500 rounded-lg transition-colors"
+                  title="发送"
+                  aria-label="发送"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

@@ -4,6 +4,10 @@ import {
   markGatewayConversationRead,
 } from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveRequestUserId } from '@/lib/auth/request-user';
+import { AuthError } from '@/lib/auth/types';
+
+export const runtime = 'nodejs';
 
 export async function POST(
   request: NextRequest,
@@ -20,10 +24,7 @@ export async function POST(
       lastReadSeq?: number;
     };
 
-    const userId = (body.userId || '').trim();
-    if (!userId) {
-      return apiError('MISSING_REQUIRED_FIELD', 400, 'userId is required');
-    }
+    const userId = await resolveRequestUserId(request, body.userId);
 
     const readState = await markGatewayConversationRead({
       conversationId,
@@ -33,6 +34,9 @@ export async function POST(
 
     return apiSuccess({ readState });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
     if (isAnotherMe2GatewayError(error)) {
       return apiError('UPSTREAM_ERROR', error.status, error.message);
     }

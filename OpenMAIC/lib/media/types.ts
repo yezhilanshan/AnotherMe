@@ -8,6 +8,9 @@
  * - Seedream (ByteDance SDXL-based image generation)
  * - Qwen Image (Alibaba Cloud Wanx image generation)
  * - Nano Banana (Lightweight image generation via Banana.dev)
+ * - MiniMax Image
+ * - Grok Image (xAI)
+ * - LibLib Image (OpenAI-compatible endpoint)
  *
  * Currently Supported Video Providers (Phase 2):
  * - Seedance (ByteDance video generation)
@@ -74,7 +77,8 @@ export type ImageProviderId =
   | 'qwen-image'
   | 'nano-banana'
   | 'minimax-image'
-  | 'grok-image';
+  | 'grok-image'
+  | 'liblib-image';
 // Add new image providers below (uncomment and modify):
 // | 'dall-e'
 // | 'midjourney'

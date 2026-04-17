@@ -27,11 +27,16 @@ def _has_drawable_geometry(payload: Any) -> bool:
 	if not has_points:
 		return False
 	primitives = payload.get("primitives") or []
-	return any(
-		isinstance(item, dict)
-		and str(item.get("type", "")).strip().lower() == "segment"
+	if any(
+		isinstance(item, dict) and str(item.get("type", "")).strip()
 		for item in primitives
-	)
+	):
+		return True
+	for bucket in ("lines", "objects", "angles", "circles", "arcs", "segments", "polygons"):
+		items = payload.get(bucket)
+		if isinstance(items, list) and bool(items):
+			return True
+	return False
 
 
 def _set_failure(state: StateLike, step_name: str, message: str) -> StateLike:
@@ -108,8 +113,11 @@ def _validate_after(step_name: str, state: StateLike) -> Tuple[bool, str]:
 		if not getattr(project, "script_steps", []):
 			return False, "ScriptAgent output missing: project.script_steps"
 	elif step_name == "voice":
-		if not isinstance(getattr(project, "tts_audio_files", None), list):
+		audio_files = getattr(project, "tts_audio_files", None)
+		if not isinstance(audio_files, list):
 			return False, "VoiceAgent output invalid: project.tts_audio_files"
+		if not audio_files:
+			return False, "VoiceAgent output invalid: project.tts_audio_files is empty"
 	elif step_name == "animation":
 		if not str(metadata.get("manim_code", "") or "").strip():
 			return False, "AnimationAgent output missing: metadata.manim_code"
@@ -132,6 +140,9 @@ def wrap_agent_node(step_name: str, node_func: NodeFunc) -> NodeFunc:
 	def _wrapped(state: StateLike) -> StateLike:
 		state.setdefault("messages", [])
 		state.setdefault("metadata", {})
+		project = state.get("project")
+		if project is not None and getattr(project, "status", "") == "failed":
+			return state
 
 		ok_before, message_before = _validate_before(step_name, state)
 		if not ok_before:

@@ -49,6 +49,12 @@ class RedisQueueClient:
     def ping(self) -> bool:
         return bool(self.client.ping())
 
+    def purge_queues(self, queue_names: Iterable[str]) -> int:
+        keys = [str(name).strip() for name in queue_names if str(name).strip()]
+        if not keys:
+            return 0
+        return int(self.client.delete(*keys) or 0)
+
 
 class PollingQueueClient:
     """DB-polling fallback queue for local development without Redis."""
@@ -66,6 +72,9 @@ class PollingQueueClient:
 
     def ping(self) -> bool:
         return False
+
+    def purge_queues(self, queue_names: Iterable[str]) -> int:
+        return 0
 
 
 def build_queue_client(settings: Settings):
