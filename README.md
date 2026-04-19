@@ -2,21 +2,21 @@
 
 This repository is now organized as one backend-first project with two engines:
 
-- `OpenMAIC`: unified main project root
-  - `openmaic-core` (Node/Next.js)
+- `AnotherMe`: unified main project root
+  - `anotherme-core` (Node/Next.js)
   - `anotherme2-engine` (Python)
   - `api-gateway` (FastAPI in `anotherme2_engine/api_gateway`)
 
 ## Unified Architecture
 
-- `api-gateway` (FastAPI, in `OpenMAIC/anotherme2_engine/api_gateway`)
+- `api-gateway` (FastAPI, in `AnotherMe/anotherme2_engine/api_gateway`)
   - unified external APIs
   - job orchestration and status tracking
-  - routes jobs to OpenMAIC core and integrated `anotherme2_engine` worker flows
-- `openmaic-core` (Node/Next.js, in `OpenMAIC`)
+  - routes jobs to AnotherMe core and integrated `anotherme2_engine` worker flows
+- `anotherme-core` (Node/Next.js, in `AnotherMe`)
   - topic-to-course generation
   - classroom content generation
-- `anotherme2-engine` (Python, in `OpenMAIC/anotherme2_engine`)
+- `anotherme2-engine` (Python, in `AnotherMe/anotherme2_engine`)
   - image-to-teaching-video flow
   - vision -> script -> voice -> animation -> merge
 - infrastructure
@@ -28,9 +28,9 @@ This repository is now organized as one backend-first project with two engines:
 
 ```text
 AnotherMe-V3/
-  OpenMAIC/
-    app/                   # openmaic-core app
-    lib/                   # openmaic-core libs
+  AnotherMe/
+    app/                   # anotherme-core app
+    lib/                   # anotherme-core libs
     anotherme2_engine/     # python engine + api-gateway
       api_gateway/
   scripts/                 # unified start/stop/status scripts
@@ -73,5 +73,5 @@ Job types:
 
 ## Notes
 
-- This integration uses only one top-level service folder: `OpenMAIC`.
+- This integration uses only one top-level service folder: `AnotherMe`.
 - You can continue running each subproject independently if needed.

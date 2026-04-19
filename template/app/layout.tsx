@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'EduMetrics - AI 教育平台',
+  title: '镜我 - AI 教育平台',
   description: 'AI 驱动的教育平台，用于创建互动课堂和解答问题。',
 };
 

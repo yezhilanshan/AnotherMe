@@ -43,22 +43,22 @@ services:
       exit 0;
       "
 
-  openmaic-core:
+  anotherme-core:
     build:
-      context: ./OpenMAIC
-    container_name: openmaic-core
+      context: ./AnotherMe
+    container_name: anotherme-core
     ports:
       - "3000:3000"
     working_dir: /app
     env_file:
-      - ./OpenMAIC/.env.example
+      - ./AnotherMe/.env.example
     volumes:
-      - openmaic_data:/app/data
+      - anotherme_data:/app/data
 
   api-gateway:
     image: python:3.11-slim
     container_name: anotherme-api-gateway
-    working_dir: /workspace/OpenMAIC/anotherme2_engine
+    working_dir: /workspace/AnotherMe/anotherme2_engine
     env_file:
       - ./.env
     environment:
@@ -72,14 +72,14 @@ services:
       - postgres
       - redis
       - minio
-      - openmaic-core
+      - anotherme-core
     ports:
       - "8080:8080"
 
   api-gateway-worker:
     image: python:3.11-slim
     container_name: anotherme-api-gateway-worker
-    working_dir: /workspace/OpenMAIC/anotherme2_engine
+    working_dir: /workspace/AnotherMe/anotherme2_engine
     env_file:
       - ./.env
     environment:
@@ -99,4 +99,4 @@ volumes:
   pg_data:
   redis_data:
   minio_data:
-  openmaic_data:
+  anotherme_data:

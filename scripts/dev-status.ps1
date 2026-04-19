@@ -10,7 +10,7 @@ if (-not (Test-Path $pidFile)) {
 
 $pids = Get-Content $pidFile -Raw | ConvertFrom-Json
 
-foreach ($name in @("openmaic", "gateway", "worker")) {
+foreach ($name in @("anotherme", "gateway", "worker")) {
   $pid = $pids.$name
   if (-not $pid) {
     Write-Host "${name}: unknown"

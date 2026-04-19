@@ -38,7 +38,7 @@ export function Sidebar() {
           <div className="h-8 w-8 bg-black rounded-lg flex items-center justify-center text-white">
             <GraduationCap className="h-5 w-5" />
           </div>
-          <span className="text-lg font-bold tracking-wider uppercase">EduMetrics</span>
+          <span className="text-lg font-bold tracking-wider uppercase">镜我</span>
         </div>
       </div>
 
