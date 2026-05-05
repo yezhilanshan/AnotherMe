@@ -647,7 +647,7 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
       // 中文常用
       {
         id: 'female-yujie',
-        name: '御姐音色',
+        name: '成熟女声',
         language: 'zh-CN',
         gender: 'female',
       },

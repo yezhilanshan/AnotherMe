@@ -169,12 +169,12 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
           />
           <div className="relative z-10 flex w-full max-w-6xl mx-4 h-[calc(100vh-6rem)] max-h-[800px] rounded-3xl overflow-hidden shadow-[0_48px_120px_rgba(61,43,16,0.28)]">
             {/* Sidebar */}
-            <div className="w-64 shrink-0 bg-[rgba(255,252,247,0.98)] border-r border-[rgba(133,88,34,0.1)] flex flex-col">
-              <div className="p-6 border-b border-[rgba(133,88,34,0.08)]">
-                <h2 className="text-lg font-bold text-[rgba(46,39,33,0.92)]">{t('settings.title')}</h2>
-                <p className="text-xs text-[rgba(123,111,99,0.72)] mt-1">{t('settings.subtitle')}</p>
+            <div className="w-60 shrink-0 bg-[rgba(255,252,247,0.98)] border-r border-[rgba(133,88,34,0.1)] flex flex-col">
+              <div className="p-5 border-b border-[rgba(133,88,34,0.08)]">
+                <h2 className="text-base font-bold text-[rgba(46,39,33,0.92)] tracking-tight">{t('settings.title')}</h2>
+                <p className="text-xs text-[rgba(123,111,99,0.65)] mt-1 leading-relaxed">{t('settings.subtitle')}</p>
               </div>
-              <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+              <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
                 {SECTIONS.map((section) => {
                   const Icon = section.icon;
                   const isActive = activeSection === section.id;
@@ -183,14 +183,19 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                       key={section.id}
                       onClick={() => setActiveSection(section.id)}
                       className={cn(
-                        'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200',
+                        'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all duration-200',
                         isActive
-                          ? 'bg-[rgba(71,54,31,0.92)] text-white shadow-[0_8px_20px_rgba(71,54,31,0.18)]'
-                          : 'text-[rgba(93,80,68,0.82)] hover:bg-[rgba(248,242,234,0.72)] hover:text-[rgba(46,39,33,0.92)]'
+                          ? 'bg-[rgba(71,54,31,0.92)] text-white shadow-[0_4px_12px_rgba(71,54,31,0.18)]'
+                          : 'text-[rgba(93,80,68,0.75)] hover:bg-[rgba(248,242,234,0.72)] hover:text-[rgba(46,39,33,0.92)]'
                       )}
                     >
-                      <Icon className="h-4 w-4" />
-                      {t(section.label)}
+                      <span className={cn(
+                        'flex items-center justify-center w-7 h-7 rounded-md transition-colors',
+                        isActive ? 'bg-white/15' : 'bg-[rgba(133,88,34,0.06)]'
+                      )}>
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <span className="truncate">{t(section.label)}</span>
                     </button>
                   );
                 })}
@@ -198,27 +203,27 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
             </div>
 
             {/* Content */}
-            <div className="flex-1 bg-[rgba(255,252,247,0.95)] flex flex-col">
+            <div className="flex-1 bg-[rgba(255,252,247,0.95)] flex flex-col min-w-0">
               {/* Header */}
-              <div className="flex items-center justify-between px-8 py-5 border-b border-[rgba(133,88,34,0.08)]">
-                <h3 className="text-base font-semibold text-[rgba(46,39,33,0.92)]">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-[rgba(133,88,34,0.08)]">
+                <h3 className="text-sm font-semibold text-[rgba(46,39,33,0.92)] tracking-wide">
                   {t(SECTIONS.find((s) => s.id === activeSection)?.label || '')}
                 </h3>
                 <button
                   onClick={() => onOpenChange(false)}
-                  className="p-2 rounded-xl text-[rgba(120,106,93,0.65)] hover:text-[rgba(93,80,68,0.92)] hover:bg-[rgba(248,242,234,0.85)] transition-all"
+                  className="p-1.5 rounded-lg text-[rgba(120,106,93,0.55)] hover:text-[rgba(93,80,68,0.92)] hover:bg-[rgba(248,242,234,0.85)] transition-all"
                 >
-                  <X className="h-5 w-5" />
+                  <X className="h-4 w-4" />
                 </button>
               </div>
 
               {/* Scrollable content */}
-              <div className="flex-1 overflow-y-auto p-8">
+              <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
                 {activeSection === 'providers' && (
-                  <div className="space-y-6 max-w-3xl">
+                  <div className="space-y-5 max-w-3xl">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectProvider')}
                         </label>
                         <Select value={providerId} onValueChange={(v) => setProviderId(v as ProviderId)}>
@@ -227,8 +232,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {providerIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -241,9 +246,9 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                     </div>
 
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
-                      <div className="space-y-5">
-                        <div className="space-y-3">
-                          <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div className="space-y-2.5">
+                          <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                             {t('settings.apiKey')}
                           </label>
                           <input
@@ -251,11 +256,11 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                             placeholder={t('settings.enterApiKey')}
                             value={providersConfig[providerId]?.apiKey || ''}
                             readOnly
-                            className="w-full h-11 px-4 rounded-xl border border-[rgba(133,88,34,0.14)] bg-[rgba(248,242,234,0.65)] text-sm text-[rgba(46,39,33,0.72)]"
+                            className="w-full h-11 px-4 rounded-xl border border-[rgba(133,88,34,0.14)] bg-[rgba(248,242,234,0.65)] text-sm text-[rgba(46,39,33,0.72)] outline-none"
                           />
                         </div>
-                        <div className="space-y-3">
-                          <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <div className="space-y-2.5">
+                          <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                             {t('settings.baseUrl')}
                           </label>
                           <input
@@ -263,11 +268,11 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                             placeholder={PROVIDERS[providerId]?.defaultBaseUrl}
                             value={providersConfig[providerId]?.baseUrl || ''}
                             readOnly
-                            className="w-full h-11 px-4 rounded-xl border border-[rgba(133,88,34,0.14)] bg-[rgba(248,242,234,0.65)] text-sm text-[rgba(46,39,33,0.72)]"
+                            className="w-full h-11 px-4 rounded-xl border border-[rgba(133,88,34,0.14)] bg-[rgba(248,242,234,0.65)] text-sm text-[rgba(46,39,33,0.72)] outline-none"
                           />
                         </div>
                       </div>
-                      <p className="mt-4 text-xs text-[rgba(123,111,99,0.65)]">
+                      <p className="mt-4 text-xs text-[rgba(123,111,99,0.55)] leading-relaxed">
                         {t('settings.quickConfigOnly')}
                       </p>
                     </div>
@@ -275,10 +280,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'tts' && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectTTSProvider')}
                         </label>
                         <Select value={ttsProviderId} onValueChange={(v) => setTTSProviderId(v as TTSProviderId)}>
@@ -287,8 +292,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {ttsProviderIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -304,7 +309,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                     {currentTTSProvider && currentTTSProvider.voices.length > 0 && (
                       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                         <div className="space-y-3">
-                          <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                          <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                             {t('settings.ttsVoice')}
                           </label>
                           <Select value={ttsVoice} onValueChange={setTTSVoice}>
@@ -313,8 +318,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                             </SelectTrigger>
                             <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)] max-h-[280px]">
                               {currentTTSProvider.voices.map((voice) => (
-                                <SelectItem 
-                                  key={voice.id} 
+                                <SelectItem
+                                  key={voice.id}
                                   value={voice.id}
                                   className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                                 >
@@ -324,7 +329,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                             </SelectContent>
                           </Select>
                           {currentTTSVoice && (
-                            <p className="text-xs text-[rgba(123,111,99,0.65)]">
+                            <p className="text-xs text-[rgba(123,111,99,0.55)] leading-relaxed">
                               {currentTTSVoice.description}
                             </p>
                           )}
@@ -336,7 +341,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-4">
                         <div className="flex items-center justify-between">
-                          <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                          <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
                             {t('settings.ttsSpeed')}
                           </label>
                           <span className="text-sm font-medium text-[rgba(71,54,31,0.92)] px-3 py-1 rounded-lg bg-[rgba(248,242,234,0.85)]">
@@ -352,7 +357,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           onChange={(e) => setTTSSpeed(parseFloat(e.target.value))}
                           className="w-full h-2 bg-[rgba(133,88,34,0.12)] rounded-lg appearance-none cursor-pointer accent-[rgba(71,54,31,0.92)]"
                         />
-                        <div className="flex justify-between text-xs text-[rgba(123,111,99,0.65)]">
+                        <div className="flex justify-between text-xs text-[rgba(123,111,99,0.55)]">
                           <span>0.5x</span>
                           <span>1.0x</span>
                           <span>1.5x</span>
@@ -366,10 +371,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'asr' && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectASRProvider')}
                         </label>
                         <Select value={asrProviderId} onValueChange={(v) => setASRProviderId(v as ASRProviderId)}>
@@ -378,8 +383,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {asrProviderIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -393,7 +398,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
 
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.asrLanguage')}
                         </label>
                         <Select value={asrLanguage} onValueChange={setASRLanguage}>
@@ -429,10 +434,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'pdf' && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectPDFProvider')}
                         </label>
                         <Select value={pdfProviderId} onValueChange={(v) => setPDFProviderId(v as PDFProviderId)}>
@@ -441,8 +446,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {pdfProviderIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -459,10 +464,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'image' && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectImageProvider')}
                         </label>
                         <Select
@@ -474,8 +479,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {imageProviderIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -492,10 +497,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'video' && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectVideoProvider')}
                         </label>
                         <Select
@@ -507,8 +512,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {videoProviderIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -525,10 +530,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'web-search' && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                           {t('settings.selectWebSearchProvider')}
                         </label>
                         <Select
@@ -540,8 +545,8 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                           </SelectTrigger>
                           <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
                             {webSearchProviderIds.map((id) => (
-                              <SelectItem 
-                                key={id} 
+                              <SelectItem
+                                key={id}
                                 value={id}
                                 className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
                               >
@@ -558,10 +563,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
                 )}
 
                 {activeSection === 'general' && (
-                  <div className="space-y-6 max-w-3xl">
+                  <div className="space-y-5 max-w-3xl">
                     <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
                       <div className="space-y-3">
-                        <label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide flex items-center gap-2">
+                        <label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide flex items-center gap-2">
                           <Languages className="h-4 w-4" />
                           {t('settings.language')}
                         </label>

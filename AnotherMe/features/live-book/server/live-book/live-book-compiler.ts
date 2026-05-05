@@ -9,6 +9,8 @@ import type { SectionPlan, BlockPlan } from './section-architect';
 import { generateLLMBridgeText } from './bridge-text-generator';
 import { selectEvidenceAnchors } from './source-registry';
 import { createLogger } from '@/lib/logger';
+import { callLLM } from '@/lib/ai/llm';
+import { resolveModel } from '@/lib/server/resolve-model';
 
 export type CompilerPageStatus = 'ready' | 'partial' | 'error';
 
@@ -127,6 +129,156 @@ function renderSourceEvidence(sourceRefs: Array<Record<string, unknown>>, limit 
   return snippets.length > 0
     ? snippets.map((snippet, index) => `${index + 1}. ${snippet}`).join('\n')
     : '';
+}
+
+function safeJsonParse<T>(text: string): T | null {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1)) as T;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function shouldUseLLMBlockGeneration(): boolean {
+  if (process.env.NODE_ENV === 'test') return false;
+  return process.env.LIVE_BOOK_LLM_BLOCKS !== 'false';
+}
+
+function buildLLMBlockPrompt(
+  input: BlockGeneratorInput,
+  planned: BlockGeneratorOutput,
+  plan?: BlockPlan,
+): string {
+  const evidence = renderSourceEvidence(input.sourceRefs, 5);
+  const objectives = input.chapter.learningObjectives || [];
+  const fallbackPayload = JSON.stringify(planned.payloadJson || {}, null, 2);
+  const isZh = input.book.language === 'zh-CN';
+
+  return `${isZh ? '请为活书阅读页生成一个真实可读的内容块。' : 'Generate a real readable block for a live-book reader.'}
+
+${isZh ? '主题' : 'Topic'}: ${input.book.topic}
+${isZh ? '书名' : 'Book'}: ${input.book.title}
+${isZh ? '章节' : 'Chapter'}: ${input.chapter.title}
+${isZh ? '章节目标' : 'Chapter goal'}: ${input.chapter.goal}
+${isZh ? '当前页面' : 'Page'}: ${input.page.title}
+${isZh ? '目标读者' : 'Target level'}: ${input.book.targetLevel}
+${isZh ? '内容块类型' : 'Block type'}: ${planned.type}
+${isZh ? '规划标题' : 'Planned title'}: ${plan?.title || planned.title}
+${isZh ? '规划理由' : 'Plan rationale'}: ${plan?.rationale || ''}
+${isZh ? '学习目标' : 'Learning objectives'}:
+${objectives.length > 0 ? objectives.map((item, index) => `${index + 1}. ${item}`).join('\n') : '-'}
+
+${isZh ? '可用资料证据' : 'Available source evidence'}:
+${evidence || '-'}
+
+${isZh ? '上一块到本块的过渡语' : 'Bridge into this block'}:
+${input.bridgeText || input.transitionIn || '-'}
+
+${isZh ? '现有模板草稿，仅作结构参考，不要照抄' : 'Existing template draft for structure only. Do not copy it verbatim'}:
+${planned.content}
+
+${isZh ? '现有 payload 结构参考' : 'Existing payload structure reference'}:
+${fallbackPayload}
+
+${isZh ? '输出要求' : 'Output requirements'}:
+1. ${isZh ? '必须只输出 JSON 对象，不要 Markdown 代码围栏。' : 'Output only a JSON object, no Markdown fence.'}
+2. ${isZh ? 'JSON 必须包含 title、content、payloadJson、paramsJson。' : 'JSON must include title, content, payloadJson, paramsJson.'}
+3. ${isZh ? 'payloadJson.type 必须等于内容块类型。' : 'payloadJson.type must equal the block type.'}
+4. ${isZh ? '内容要具体、基于资料和学习目标，避免“围绕某某建立关键定义”这类模板句。' : 'Content must be concrete and evidence-aware; avoid generic template phrasing.'}
+5. ${isZh ? '如果是 quiz，payloadJson.questions 至少 1 题，包含 id、prompt、answerType、expectedAnswer。' : 'For quiz, payloadJson.questions needs at least one item with id, prompt, answerType, expectedAnswer.'}
+6. ${isZh ? '如果是 flash_cards，payloadJson.cards 至少 3 张。' : 'For flash_cards, payloadJson.cards needs at least three cards.'}
+7. ${isZh ? '如果是 figure，payloadJson.code 用 Mermaid，payloadJson.caption 写清楚图意。' : 'For figure, payloadJson.code should be Mermaid and payloadJson.caption should explain the diagram.'}
+8. ${isZh ? '如果是 code，payloadJson.code 给出可读示例，并注明 language。' : 'For code, payloadJson.code should be readable sample code with language.'}
+9. ${isZh ? '如果是 timeline，payloadJson.steps 至少 4 步。' : 'For timeline, payloadJson.steps needs at least four steps.'}
+
+JSON shape:
+{
+  "title": "...",
+  "content": "...",
+  "payloadJson": { "type": "${planned.type}" },
+  "paramsJson": {}
+}`;
+}
+
+async function generateLLMBlockOutput(
+  input: BlockGeneratorInput,
+  planned: BlockGeneratorOutput,
+  plan?: BlockPlan,
+): Promise<BlockGeneratorOutput | null> {
+  if (!shouldUseLLMBlockGeneration()) return null;
+
+  try {
+    const resolved = resolveModel({});
+    const result = await callLLM(
+      {
+        model: resolved.model,
+        system:
+          input.book.language === 'zh-CN'
+            ? '你是一位严谨的活书内容生成器。只输出可解析 JSON，不输出解释。'
+            : 'You are a rigorous live-book content generator. Output parseable JSON only.',
+        prompt: buildLLMBlockPrompt(input, planned, plan),
+        maxOutputTokens: 2600,
+        temperature: 0.45,
+      },
+      'live-book-block-generator',
+      {
+        retries: 1,
+        validate: (text) =>
+          text.includes('title') && text.includes('content') && text.includes('payloadJson'),
+      },
+    );
+
+    const parsed = safeJsonParse<{
+      title?: unknown;
+      content?: unknown;
+      payloadJson?: unknown;
+      paramsJson?: unknown;
+    }>(result.text);
+
+    if (!parsed || typeof parsed.title !== 'string' || typeof parsed.content !== 'string') {
+      return null;
+    }
+
+    const payloadJson =
+      parsed.payloadJson && typeof parsed.payloadJson === 'object'
+        ? { type: planned.type, ...(parsed.payloadJson as Record<string, unknown>) }
+        : planned.payloadJson;
+    const paramsJson =
+      parsed.paramsJson && typeof parsed.paramsJson === 'object'
+        ? (parsed.paramsJson as Record<string, unknown>)
+        : planned.paramsJson;
+
+    return {
+      type: planned.type,
+      title: parsed.title.trim() || planned.title,
+      content: parsed.content.trim() || planned.content,
+      payloadJson,
+      paramsJson,
+      metadataJson: {
+        ...(planned.metadataJson || {}),
+        generatedBy: 'llm',
+        model: resolved.modelString,
+      },
+    };
+  } catch (error) {
+    log.warn('LLM block generation failed, using template block:', error);
+    return null;
+  }
 }
 
 function buildBlockPayload(input: {
@@ -478,7 +630,7 @@ export class BlockGeneratorRegistry {
     if (!first) {
       throw new Error(`Generator for ${plan.type} returned empty output`);
     }
-    return first;
+    return (await generateLLMBlockOutput(context, first, plan)) || first;
   }
 }
 
@@ -1213,6 +1365,15 @@ export class LiveBookCompiler {
               : asArray(fallbackTemplate(context).find((f) => f.type === planBlock.type) || []);
           }
 
+          generated = (
+            await Promise.all(
+              generated.map(
+                async (item) =>
+                  (await generateLLMBlockOutput(blockContext, item, planBlock)) || item,
+              ),
+            )
+          ).filter((item) => item.content.trim().length > 0);
+
           for (const item of generated) {
             const block = makeBlock({
               type: item.type,
@@ -1297,7 +1458,13 @@ export class LiveBookCompiler {
       const globalIndex = (sectionPlan?.blocks.length || 0) + i;
 
       try {
-        const generated = asArray(generator.generate(context));
+        const generated = (
+          await Promise.all(
+            asArray(generator.generate(context)).map(
+              async (item) => (await generateLLMBlockOutput(context, item)) || item,
+            ),
+          )
+        ).filter((item) => item.content.trim().length > 0);
         for (const item of generated) {
           const block = makeBlock({
             type: item.type,

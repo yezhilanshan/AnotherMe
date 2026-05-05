@@ -29,15 +29,15 @@ const navItems: Array<{
   badge?: string;
 }> = [
   { name: '学习概览', href: '/', icon: LayoutDashboard },
-  { name: '我的课程', href: '/classes', icon: Library },
-  { name: '创建课堂', href: '/create-class', icon: BookOpen },
-  { name: '拍题视频', href: '/photo-to-video', icon: Camera },
   { name: '活书引擎', href: '/live-book', icon: BookText },
+  { name: '创建课堂', href: '/create-class', icon: BookOpen },
+  { name: '我的课程', href: '/classes', icon: Library },
+  { name: '拍题答疑', href: '/photo-to-video', icon: Camera },
   { name: '笔记本', href: '/notebook', icon: NotebookPen },
-  { name: '数据统计', href: '/statistics', icon: BarChart2 },
   { name: '诊断练习', href: '/diagnostic', icon: Stethoscope },
+  { name: 'AI 导师', href: '/ai-tutor', icon: Headphones },
   { name: '消息中心', href: '/messages', icon: MessageSquare },
-  { name: '系统设置', href: '/settings', icon: Settings },
+  { name: '数据统计', href: '/statistics', icon: BarChart2 },
 ];
 
 export function Sidebar() {
@@ -111,22 +111,38 @@ export function Sidebar() {
           );
         })}
 
-        <Link prefetch={false} href="/ai-tutor" className="mt-8 px-4 flex items-center justify-between text-sm text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 transition-colors group">
-          <div className="flex items-center gap-4">
-            <Headphones className="h-5 w-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-700 dark:group-hover:text-slate-200 transition-colors" />
-            <span>AI 导师</span>
-          </div>
-        </Link>
-
-        <button
-          type="button"
-          onClick={handleLogout}
-          disabled={loggingOut}
-          className="mt-4 flex items-center gap-4 px-4 py-3 w-full text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 transition-colors group text-sm disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          <LogOut className="h-5 w-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-700 dark:group-hover:text-slate-200" />
-          <span>{loggingOut ? '退出中...' : '退出登录'}</span>
-        </button>
+        <div className="mt-8 flex flex-col gap-1">
+          <Link
+            href="/settings"
+            className={cn(
+              'flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group',
+              pathname === '/settings'
+                ? 'bg-black dark:bg-white text-white dark:text-slate-900 font-medium shadow-md'
+                : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100'
+            )}
+          >
+            <div className="flex items-center gap-4">
+              <Settings
+                className={cn(
+                  'h-5 w-5 transition-colors',
+                  pathname === '/settings'
+                    ? 'text-white dark:text-slate-900'
+                    : 'text-gray-400 dark:text-slate-500 group-hover:text-gray-700 dark:group-hover:text-slate-200'
+                )}
+              />
+              <span className="text-sm">系统设置</span>
+            </div>
+          </Link>
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="flex items-center gap-4 px-4 py-3 w-full text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 transition-colors group text-sm disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <LogOut className="h-5 w-5 text-gray-400 dark:text-slate-500 group-hover:text-gray-700 dark:group-hover:text-slate-200" />
+            <span>{loggingOut ? '退出中...' : '退出登录'}</span>
+          </button>
+        </div>
       </div>
 
       <div className="p-8 flex flex-col items-center justify-center text-center">

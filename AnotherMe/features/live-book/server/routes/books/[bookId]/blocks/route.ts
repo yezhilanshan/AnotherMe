@@ -10,7 +10,7 @@ export async function POST(req: NextRequest, context: Params) {
   try {
     const { bookId } = await context.params;
     const body = (await req.json()) as {
-      action?: 'regenerate' | 'insert' | 'move' | 'delete';
+      action?: 'regenerate' | 'insert' | 'move' | 'delete' | 'change_type';
       pageId?: string;
       blockId?: string;
       direction?: 'up' | 'down';

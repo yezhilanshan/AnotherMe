@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
@@ -124,7 +124,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
             {isDoubao ? (
               <>
                 <div className="space-y-2.5">
-                  <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                  <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                     {t('settings.doubaoAppId')}
                   </Label>
                   <div className="relative">
@@ -154,7 +154,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
                   </div>
                 </div>
                 <div className="space-y-2.5">
-                  <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                  <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                     {t('settings.doubaoAccessKey')}
                   </Label>
                   <div className="relative">
@@ -186,7 +186,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
               </>
             ) : (
               <div className="space-y-2.5">
-                <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+                <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                   {t('settings.ttsApiKey')}
                 </Label>
                 <div className="relative">
@@ -221,7 +221,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
               </div>
             )}
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                 {t('settings.ttsBaseUrl')}
               </Label>
               <Input
@@ -282,7 +282,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
       {/* Test TTS */}
       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
         <div className="space-y-3">
-          <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
             {t('settings.testTTS')}
           </Label>
           <div className="flex gap-3">
@@ -341,7 +341,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
       {ttsProvider.models.length > 0 && (
         <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
           <div className="space-y-3">
-            <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+            <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
               {t('settings.availableModels')}
             </Label>
             <div className="flex flex-wrap gap-2">

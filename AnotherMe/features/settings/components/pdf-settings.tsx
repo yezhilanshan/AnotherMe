@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { Label } from '@/components/ui/label';
@@ -103,7 +103,7 @@ export function PDFSettings({ selectedProviderId }: PDFSettingsProps) {
         <div className="space-y-4 rounded-[28px] border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.84)] p-5 shadow-[0_18px_40px_rgba(99,71,28,0.05)]">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label className="text-sm font-medium text-[rgba(54,41,23,0.92)]">{t('settings.pdfBaseUrl')}</Label>
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">{t('settings.pdfBaseUrl')}</Label>
               <div className="flex gap-2">
                 <Input
                   name={`pdf-base-url-${selectedProviderId}`}
@@ -138,7 +138,7 @@ export function PDFSettings({ selectedProviderId }: PDFSettingsProps) {
             </div>
 
             <div className="space-y-2">
-              <Label className="text-sm font-medium text-[rgba(54,41,23,0.92)]">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                 {t('settings.pdfApiKey')}
                 <span className="text-muted-foreground ml-1 font-normal">
                   ({t('settings.optional')})
@@ -209,7 +209,7 @@ export function PDFSettings({ selectedProviderId }: PDFSettingsProps) {
 
       {/* Features List */}
       <div className="space-y-3 rounded-[28px] border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.84)] p-5 shadow-[0_18px_40px_rgba(99,71,28,0.05)]">
-        <Label className="text-sm font-medium text-[rgba(54,41,23,0.92)]">{t('settings.pdfFeatures')}</Label>
+        <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">{t('settings.pdfFeatures')}</Label>
         <div className="flex flex-wrap gap-2">
           {pdfProvider.features.map((feature) => (
             <Badge

@@ -345,6 +345,37 @@ function buildLearningContextSection(context?: LearningContext | null): string {
     lines.push(`Enabled learning tools: ${enabledTools.join(', ')}`);
   }
 
+  // Diagnostic Session: inject recent diagnostic practice results
+  const diag = context.diagnosticSession;
+  if (diag && diag.probes.length > 0) {
+    ktLines.push('');
+    ktLines.push('# Recent Diagnostic Session');
+    ktLines.push(
+      `Student completed a diagnostic session (${diag.correctCount}/${diag.totalAnswered} correct).`,
+    );
+    for (const probe of diag.probes) {
+      ktLines.push(
+        `- 知识点「${probe.knowledgePointId}」: ${probe.correct ? '已掌握' : '未掌握'} — 策略: ${probe.teachingAction}`,
+      );
+    }
+    ktLines.push(
+      'Use these results to adjust your teaching. For knowledge points the student got wrong, prioritize re-explanation or worked examples. For correct answers, move forward or increase difficulty.',
+    );
+
+    // Block-level mastery scores
+    if (diag.blockMastery && Object.keys(diag.blockMastery).length > 0) {
+      ktLines.push('');
+      ktLines.push('## Block Mastery Scores');
+      for (const [kpId, mastery] of Object.entries(diag.blockMastery)) {
+        const pct = Math.round(mastery * 100);
+        ktLines.push(`- ${kpId}: ${pct}%`);
+      }
+      ktLines.push(
+        'Use these mastery scores to determine review priorities. Scores below 50% need immediate attention.',
+      );
+    }
+  }
+
   return `
 # Learning Context
 Use this context to personalize explanations, examples, pacing, and follow-up questions. Do not expose IDs or internal telemetry to the student.

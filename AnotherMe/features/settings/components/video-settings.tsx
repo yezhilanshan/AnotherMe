@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useCallback, useMemo } from 'react';
 import { Label } from '@/components/ui/label';
@@ -155,8 +155,8 @@ export function VideoSettings({ selectedProviderId }: VideoSettingsProps) {
       {/* API Key + Test inline */}
       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
         <div className="space-y-3">
-          <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
-            API Key
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
+            {t('settings.apiSecret')}
           </Label>
           <div className="flex gap-3">
             <div className="relative flex-1">
@@ -231,8 +231,8 @@ export function VideoSettings({ selectedProviderId }: VideoSettingsProps) {
       {/* Base URL */}
       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
         <div className="space-y-3">
-          <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
-            Base URL
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
+            {t('settings.apiHost')}
           </Label>
           <Input
             name={`video-base-url-${selectedProviderId}`}
@@ -272,7 +272,7 @@ export function VideoSettings({ selectedProviderId }: VideoSettingsProps) {
       {/* Model list */}
       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-          <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
             {t('settings.models')}
           </Label>
           <Button 
@@ -345,7 +345,7 @@ export function VideoSettings({ selectedProviderId }: VideoSettingsProps) {
           </DialogDescription>
           <div className="space-y-4 pt-2">
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)]">{t('settings.modelId')}</Label>
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)]">{t('settings.modelId')}</Label>
               <Input
                 value={modelForm.id}
                 onChange={(e) => setModelForm((prev) => ({ ...prev, id: e.target.value }))}
@@ -354,7 +354,7 @@ export function VideoSettings({ selectedProviderId }: VideoSettingsProps) {
               />
             </div>
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)]">{t('settings.modelName')}</Label>
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)]">{t('settings.modelName')}</Label>
               <Input
                 value={modelForm.name}
                 onChange={(e) => setModelForm((prev) => ({ ...prev, name: e.target.value }))}
