@@ -444,6 +444,14 @@ export async function POST(req: NextRequest) {
         ],
         lookbackDays: 14,
       });
+
+      // Merge client-provided diagnostic session into learning context
+      if (body.diagnosticSession && learningContext) {
+        learningContext = {
+          ...learningContext,
+          diagnosticSession: body.diagnosticSession,
+        };
+      }
     }
 
     // Use the native request signal for abort propagation

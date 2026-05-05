@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { Label } from '@/components/ui/label';
@@ -49,7 +49,7 @@ export function WebSearchSettings({ selectedProviderId }: WebSearchSettingsProps
         <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                 {t('settings.webSearchApiKey')}
               </Label>
               <div className="relative">
@@ -83,7 +83,7 @@ export function WebSearchSettings({ selectedProviderId }: WebSearchSettingsProps
             </div>
 
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                 {t('settings.webSearchBaseUrl')}
               </Label>
               <Input

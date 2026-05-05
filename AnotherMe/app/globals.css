@@ -343,6 +343,31 @@
   -ms-overflow-style: none;
 }
 
+/* Thin scrollbar: hidden by default, shows a thin track on hover */
+@utility scrollbar-thin {
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 4px;
+  }
+  &:hover::-webkit-scrollbar-thumb {
+    background: rgba(133, 88, 34, 0.2);
+  }
+  &:hover::-webkit-scrollbar-thumb:hover {
+    background: rgba(133, 88, 34, 0.35);
+  }
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  &:hover {
+    scrollbar-color: rgba(133, 88, 34, 0.2) transparent;
+  }
+}
+
 /* Shimmer sweep for skeleton loading */
 @keyframes shimmer {
   0% {

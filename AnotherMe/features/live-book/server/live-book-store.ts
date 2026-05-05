@@ -1436,7 +1436,9 @@ async function runBackgroundCompilation(
 
     const sectionPlan = sectionPlans.get(chapter.id);
 
-    const compiled = liveBookCompiler.compilePage(book, page, chapter, sectionPlan);
+    const compiled = await liveBookCompiler.compilePageAsync(book, page, chapter, sectionPlan, {
+      concurrency: 1,
+    });
 
     const updatedBook: LiveBookRecord = {
       ...book,
@@ -1745,7 +1747,9 @@ export async function compileLiveBookPage(
     sectionPlan = sectionPlans.get(chapter.id);
   }
 
-  const compiled = liveBookCompiler.compilePage(book, page, chapter, sectionPlan);
+  const compiled = await liveBookCompiler.compilePageAsync(book, page, chapter, sectionPlan, {
+    concurrency: 1,
+  });
   const next: LiveBookRecord = {
     ...book,
     status: compiled.pageStatus === 'error' ? 'failed' : 'ready',
@@ -1813,7 +1817,7 @@ export function subscribeLiveBookJob(
 export async function operateLiveBookBlock(
   bookId: string,
   payload: {
-    action: 'regenerate' | 'insert' | 'move' | 'delete';
+    action: 'regenerate' | 'insert' | 'move' | 'delete' | 'change_type';
     pageId: string;
     blockId?: string;
     direction?: 'up' | 'down';
@@ -1842,6 +1846,21 @@ export async function operateLiveBookBlock(
       ),
     );
     blocks = regeneratedBlocks;
+  }
+
+  if (payload.action === 'change_type') {
+    if (!payload.blockId || !payload.blockType) return null;
+    const nextType = payload.blockType;
+    const chapter = book.chapters.find((item) => item.id === page.chapterId);
+    if (!chapter) return null;
+    const changedBlocks = await Promise.all(
+      blocks.map(async (block) =>
+        block.id === payload.blockId
+          ? await liveBookCompiler.changeBlockType(book, page, chapter, block, nextType)
+          : block,
+      ),
+    );
+    blocks = changedBlocks;
   }
 
   if (payload.action === 'insert') {

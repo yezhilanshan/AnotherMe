@@ -17,6 +17,24 @@ import {
   Clock,
   Tag,
   FileX,
+  Pin,
+  Star,
+  ArrowUpDown,
+  LayoutGrid,
+  List,
+  RotateCcw,
+  Archive,
+  Trash,
+  X,
+  ChevronDown,
+  GripVertical,
+  FileUp,
+  FileDown,
+  CheckSquare,
+  Square,
+  MoreHorizontal,
+  Search,
+  FileJson,
 } from 'lucide-react';
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
@@ -30,6 +48,26 @@ import {
   NotebookNote,
   readNotebookNotes,
   upsertNotebookNote,
+  toggleNotePin,
+  toggleNoteFavorite,
+  readNotebookSettings,
+  saveNotebookSettings,
+  sortNotes,
+  groupNotesBySubject,
+  readTrashNotes,
+  restoreFromTrash,
+  permanentlyDeleteFromTrash,
+  clearTrash,
+  createNoteFromTemplate,
+  NOTE_TEMPLATES,
+  batchDeleteNotes,
+  exportAllNotes,
+  importNotes,
+  searchNotesWithHighlight,
+  type NoteSortOption,
+  type NotebookSettings,
+  type DeletedNote,
+  type NoteTemplate,
 } from '@/lib/notebook/storage';
 import { cn } from '@/lib/utils';
 import { recordLearningEvent } from '@/lib/learning-events/client';
@@ -298,12 +336,34 @@ export default function DashboardNotebookPage() {
   const [blockDraft, setBlockDraft] = useState('');
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [hasHydrated, setHasHydrated] = useState(false);
+  
+  // New UX features
+  const [settings, setSettings] = useState<NotebookSettings>({
+    sortBy: 'updatedAt',
+    sortOrder: 'desc',
+    viewMode: 'list',
+  });
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashNotes, setTrashNotes] = useState<DeletedNote[]>([]);
+  const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+  const [draggedBlockIndex, setDraggedBlockIndex] = useState<number | null>(null);
+  
+  // Batch operations
+  const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(new Set());
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false);
+  const [importExportMenuOpen, setImportExportMenuOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<ReturnType<typeof searchNotesWithHighlight>>([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const editingTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const articleRef = useRef<HTMLDivElement | null>(null);
   const createNewNoteRef = useRef<() => void>(() => {});
   const forceSaveRef = useRef<() => void>(() => {});
+  const settingsDropdownRef = useRef<HTMLDivElement | null>(null);
+  const importExportRef = useRef<HTMLDivElement | null>(null);
+  const fileImportRef = useRef<HTMLInputElement | null>(null);
 
   const selectedNote = useMemo(
     () => notes.find((note) => note.id === selectedId) ?? null,
@@ -343,17 +403,37 @@ export default function DashboardNotebookPage() {
     );
   }, [slashQuery]);
 
-  const filteredNotes = useMemo(() => {
+  const filteredAndSortedNotes = useMemo(() => {
+    let result = notes;
+    
+    // Apply search filter
     const keyword = search.trim().toLowerCase();
-    if (!keyword) return notes;
-    return notes.filter((note) => {
-      return (
-        note.title.toLowerCase().includes(keyword) ||
-        note.subject.toLowerCase().includes(keyword) ||
-        note.content.toLowerCase().includes(keyword)
-      );
-    });
-  }, [notes, search]);
+    if (keyword) {
+      result = result.filter((note) => {
+        return (
+          note.title.toLowerCase().includes(keyword) ||
+          note.subject.toLowerCase().includes(keyword) ||
+          note.content.toLowerCase().includes(keyword) ||
+          note.tags.some((tag) => tag.toLowerCase().includes(keyword))
+        );
+      });
+    }
+    
+    // Apply sorting
+    return sortNotes(result, settings.sortBy, settings.sortOrder);
+  }, [notes, search, settings.sortBy, settings.sortOrder]);
+
+  const groupedNotes = useMemo(() => {
+    return groupNotesBySubject(filteredAndSortedNotes);
+  }, [filteredAndSortedNotes]);
+
+  const noteStats = useMemo(() => {
+    const totalNotes = notes.length;
+    const totalWords = notes.reduce((sum, note) => sum + note.content.length, 0);
+    const pinnedCount = notes.filter((n) => n.isPinned).length;
+    const favoriteCount = notes.filter((n) => n.isFavorite).length;
+    return { totalNotes, totalWords, pinnedCount, favoriteCount };
+  }, [notes]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -379,8 +459,62 @@ export default function DashboardNotebookPage() {
       setThemeId('paper');
     }
 
+    // Load settings
+    const loadedSettings = readNotebookSettings();
+    setSettings(loadedSettings);
+    
+    // Load trash
+    setTrashNotes(readTrashNotes());
+
     setHasHydrated(true);
   }, []);
+
+  // Close settings dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (settingsDropdownRef.current && !settingsDropdownRef.current.contains(event.target as Node)) {
+        setShowSettingsDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Only handle when not in input/textarea
+      const target = event.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        const currentList = showTrash ? trashNotes : filteredAndSortedNotes;
+        if (currentList.length === 0) return;
+        
+        const currentIndex = currentList.findIndex((n) => n.id === selectedId);
+        let nextIndex: number;
+        
+        if (event.key === 'ArrowUp') {
+          nextIndex = currentIndex <= 0 ? currentList.length - 1 : currentIndex - 1;
+        } else {
+          nextIndex = currentIndex >= currentList.length - 1 ? 0 : currentIndex + 1;
+        }
+        
+        const nextNote = currentList[nextIndex];
+        if (nextNote) {
+          if (showTrash) {
+            setSelectedId(nextNote.id);
+            setDraft(toDraft(nextNote as NotebookNote));
+          } else {
+            switchNote(nextNote);
+          }
+        }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [filteredAndSortedNotes, trashNotes, selectedId, showTrash]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !hasHydrated) return;
@@ -469,10 +603,189 @@ export default function DashboardNotebookPage() {
 
   const removeCurrentNote = () => {
     if (!selectedId) return;
-    deleteNotebookNote(selectedId);
+    const deleted = deleteNotebookNote(selectedId);
+    if (deleted) {
+      setTrashNotes((prev) => [deleted, ...prev].slice(0, 50));
+    }
     refreshFromStorage();
-    setStatusText('已删除文稿');
+    setStatusText('已删除文稿，可在回收站恢复');
   };
+
+  const handlePinNote = (noteId: string, event?: React.MouseEvent) => {
+    event?.stopPropagation();
+    const updated = toggleNotePin(noteId);
+    if (updated) {
+      refreshFromStorage(updated.id);
+      setStatusText(updated.isPinned ? '已置顶笔记' : '已取消置顶');
+    }
+  };
+
+  const handleFavoriteNote = (noteId: string, event?: React.MouseEvent) => {
+    event?.stopPropagation();
+    const updated = toggleNoteFavorite(noteId);
+    if (updated) {
+      refreshFromStorage(updated.id);
+      setStatusText(updated.isFavorite ? '已收藏笔记' : '已取消收藏');
+    }
+  };
+
+  const handleRestoreFromTrash = (noteId: string) => {
+    const restored = restoreFromTrash(noteId);
+    if (restored) {
+      setTrashNotes((prev) => prev.filter((n) => n.id !== noteId));
+      refreshFromStorage(restored.id);
+      setStatusText('已恢复笔记');
+    }
+  };
+
+  const handlePermanentDelete = (noteId: string) => {
+    if (permanentlyDeleteFromTrash(noteId)) {
+      setTrashNotes((prev) => prev.filter((n) => n.id !== noteId));
+      if (selectedId === noteId) {
+        setSelectedId(null);
+        setDraft(EMPTY_DRAFT);
+      }
+      setStatusText('已永久删除');
+    }
+  };
+
+  const handleClearTrash = () => {
+    clearTrash();
+    setTrashNotes([]);
+    if (showTrash) {
+      setSelectedId(null);
+      setDraft(EMPTY_DRAFT);
+    }
+    setStatusText('已清空回收站');
+  };
+
+  const updateSettings = (newSettings: Partial<NotebookSettings>) => {
+    const updated = { ...settings, ...newSettings };
+    setSettings(updated);
+    saveNotebookSettings(updated);
+  };
+
+  // Drag and drop for blocks
+  const handleBlockDragStart = (index: number) => {
+    setDraggedBlockIndex(index);
+  };
+
+  const handleBlockDragOver = (event: React.DragEvent, index: number) => {
+    event.preventDefault();
+    if (draggedBlockIndex === null || draggedBlockIndex === index) return;
+  };
+
+  const handleBlockDrop = (event: React.DragEvent, targetIndex: number) => {
+    event.preventDefault();
+    if (draggedBlockIndex === null || draggedBlockIndex === targetIndex) return;
+
+    const newBlocks = [...blocks];
+    const [movedBlock] = newBlocks.splice(draggedBlockIndex, 1);
+    newBlocks.splice(targetIndex, 0, movedBlock);
+    
+    setDraft((prev) => ({ ...prev, content: joinMarkdownBlocks(newBlocks) }));
+    setEditingIndex(targetIndex);
+    setDraggedBlockIndex(null);
+    setStatusText('已调整段落顺序');
+  };
+
+  // Template functions
+  const createNoteWithTemplate = (templateId: string) => {
+    const created = createNoteFromTemplate(templateId);
+    refreshFromStorage(created.id);
+    setShowTemplateSelector(false);
+    setStatusText('已从模板创建笔记');
+  };
+
+  // Batch operations
+  const toggleNoteSelection = (noteId: string) => {
+    setSelectedNoteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(noteId)) {
+        next.delete(noteId);
+      } else {
+        next.add(noteId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllNotes = () => {
+    setSelectedNoteIds(new Set(filteredAndSortedNotes.map((n) => n.id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedNoteIds(new Set());
+  };
+
+  const batchDeleteSelected = () => {
+    if (selectedNoteIds.size === 0) return;
+    const count = batchDeleteNotes(Array.from(selectedNoteIds));
+    setTrashNotes(readTrashNotes());
+    refreshFromStorage();
+    setSelectedNoteIds(new Set());
+    setIsBatchMode(false);
+    setStatusText(`已批量删除 ${count} 篇笔记`);
+  };
+
+  const batchPinSelected = () => {
+    if (selectedNoteIds.size === 0) return;
+    selectedNoteIds.forEach((id) => {
+      const note = notes.find((n) => n.id === id);
+      if (note && !note.isPinned) {
+        toggleNotePin(id);
+      }
+    });
+    refreshFromStorage();
+    setSelectedNoteIds(new Set());
+    setIsBatchMode(false);
+    setStatusText(`已置顶 ${selectedNoteIds.size} 篇笔记`);
+  };
+
+  // Import/Export
+  const handleExportJSON = () => {
+    const exportData = exportAllNotes();
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    saveAs(blob, `anotherme-notes-${new Date().toISOString().split('T')[0]}.json`);
+    setImportExportMenuOpen(false);
+    setStatusText('已导出笔记数据');
+  };
+
+  const handleImportJSON = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const exportData = JSON.parse(reader.result as string);
+        const result = importNotes(exportData);
+        refreshFromStorage();
+        setImportExportMenuOpen(false);
+        if (result.errors.length > 0) {
+          setStatusText(`导入完成: ${result.imported} 成功, ${result.skipped} 跳过, ${result.errors.length} 错误`);
+        } else {
+          setStatusText(`成功导入 ${result.imported} 篇笔记`);
+        }
+      } catch {
+        setStatusText('导入失败: 无效的文件格式');
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
+  // Enhanced search
+  useEffect(() => {
+    if (search.trim()) {
+      const results = searchNotesWithHighlight(notes, search);
+      setSearchResults(results);
+      setShowSearchResults(true);
+    } else {
+      setSearchResults([]);
+      setShowSearchResults(false);
+    }
+  }, [search, notes]);
 
   const commitBlock = (index: number, value: string) => {
     const nextBlocks = [...blocks];
@@ -775,6 +1088,23 @@ export default function DashboardNotebookPage() {
           event.currentTarget.value = '';
         }}
       />
+      
+      {/* Hidden file input for JSON import */}
+      <input
+        ref={fileImportRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleImportJSON}
+      />
+      
+      {/* Template Selector Modal */}
+      <TemplateSelector
+        isOpen={showTemplateSelector}
+        onClose={() => setShowTemplateSelector(false)}
+        onSelect={createNoteWithTemplate}
+        theme={theme}
+      />
 
       <div
         className={cn(
@@ -789,160 +1119,581 @@ export default function DashboardNotebookPage() {
               <div className="mb-3 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs uppercase tracking-[0.15em] font-semibold opacity-80">
                   <FolderTree className="h-3.5 w-3.5" />
-                  我的笔记
+                  {showTrash ? '回收站' : '我的笔记'}
                   <span className="text-[10px] normal-case tracking-normal opacity-60 font-normal">
-                    ({filteredNotes.length})
+                    ({showTrash ? trashNotes.length : filteredAndSortedNotes.length})
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={createNewNote}
-                  className={cn(
-                    'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
-                    theme.id === 'night'
-                      ? 'bg-[#263245] text-[#dce6f6] hover:bg-[#2d3d54]'
-                      : 'bg-[#e1dad0] text-[#3c342b] hover:bg-[#d5cdc1]',
+                <div className="flex items-center gap-1">
+                  {!showTrash && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowTemplateSelector(true)}
+                        className={cn(
+                          'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+                          theme.id === 'night'
+                            ? 'bg-[#263245] text-[#dce6f6] hover:bg-[#2d3d54]'
+                            : 'bg-[#e1dad0] text-[#3c342b] hover:bg-[#d5cdc1]',
+                        )}
+                      >
+                        <Plus className="h-3 w-3" />
+                        新建
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsBatchMode(!isBatchMode)}
+                        className={cn(
+                          'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors',
+                          isBatchMode
+                            ? theme.id === 'night'
+                              ? 'bg-[#3a506e] text-[#dce6f6]'
+                              : 'bg-[#c8bdb0] text-[#3c342b]'
+                            : theme.id === 'night'
+                              ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                              : 'text-[#6b645a] hover:bg-[#e8e4dd]',
+                        )}
+                        title="批量操作"
+                      >
+                        <CheckSquare className="h-3 w-3" />
+                      </button>
+                    </>
                   )}
-                >
-                  <Plus className="h-3 w-3" />
-                  新建
-                </button>
+                </div>
               </div>
-              <div className="relative">
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="搜索笔记..."
-                  className={cn(
-                    'h-8 w-full rounded-lg border bg-transparent px-3 text-xs outline-none transition-colors',
-                    theme.id === 'night'
-                      ? 'border-[#3a475b] text-[#d9e3f2] placeholder:text-[#8091ab] focus:border-[#5a7aaa]'
-                      : 'border-[#d8d1c6] text-[#403a33] placeholder:text-[#928776] focus:border-[#a89b8a]',
+              
+              {/* Search and Controls */}
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className={cn(
+                    'absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5',
+                    theme.id === 'night' ? 'text-[#5a6d85]' : 'text-[#a0988c]',
+                  )} />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder={showTrash ? '搜索已删除笔记...' : '搜索笔记...'}
+                    className={cn(
+                      'h-8 w-full rounded-lg border bg-transparent pl-8 pr-3 text-xs outline-none transition-colors',
+                      theme.id === 'night'
+                        ? 'border-[#3a475b] text-[#d9e3f2] placeholder:text-[#8091ab] focus:border-[#5a7aaa]'
+                        : 'border-[#d8d1c6] text-[#403a33] placeholder:text-[#928776] focus:border-[#a89b8a]',
+                    )}
+                  />
+                  {search && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch('')}
+                      className={cn(
+                        'absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded',
+                        theme.id === 'night'
+                          ? 'text-[#5a6d85] hover:bg-[#3a475b]'
+                          : 'text-[#a0988c] hover:bg-[#e8e4dd]',
+                      )}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   )}
-                />
+                </div>
+                
+                {/* Batch Operation Bar */}
+                {isBatchMode && !showTrash && (
+                  <div className={cn(
+                    'flex items-center justify-between px-2 py-1.5 rounded-lg',
+                    theme.id === 'night' ? 'bg-[#263245]' : 'bg-[#e8e4dd]',
+                  )}>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={selectAllNotes}
+                        className={cn(
+                          'text-[10px] font-medium transition-colors',
+                          theme.id === 'night' ? 'text-[#8ea2c2] hover:text-[#dce6f6]' : 'text-[#6b645a] hover:text-[#3c342b]',
+                        )}
+                      >
+                        全选
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearSelection}
+                        className={cn(
+                          'text-[10px] font-medium transition-colors',
+                          theme.id === 'night' ? 'text-[#8ea2c2] hover:text-[#dce6f6]' : 'text-[#6b645a] hover:text-[#3c342b]',
+                        )}
+                      >
+                        清空
+                      </button>
+                    </div>
+                    <span className={cn(
+                      'text-[10px]',
+                      theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#8a8075]',
+                    )}>
+                      已选 {selectedNoteIds.size} 篇
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={batchPinSelected}
+                        disabled={selectedNoteIds.size === 0}
+                        className={cn(
+                          'p-1 rounded transition-colors disabled:opacity-40',
+                          theme.id === 'night'
+                            ? 'text-[#8ea2c2] hover:bg-[#3a475b]'
+                            : 'text-[#6b645a] hover:bg-[#d5cdc1]',
+                        )}
+                        title="批量置顶"
+                      >
+                        <Pin className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={batchDeleteSelected}
+                        disabled={selectedNoteIds.size === 0}
+                        className={cn(
+                          'p-1 rounded transition-colors disabled:opacity-40',
+                          theme.id === 'night'
+                            ? 'text-red-400 hover:bg-[#3a475b]'
+                            : 'text-red-600 hover:bg-[#d5cdc1]',
+                        )}
+                        title="批量删除"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
+                {/* View Controls */}
+                {!showTrash && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      {/* Sort Dropdown */}
+                      <div className="relative" ref={settingsDropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setShowSettingsDropdown(!showSettingsDropdown)}
+                          className={cn(
+                            'inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+                            theme.id === 'night'
+                              ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                              : 'text-[#6b645a] hover:bg-[#e8e4dd]',
+                          )}
+                        >
+                          <ArrowUpDown className="h-3 w-3" />
+                          {settings.sortBy === 'updatedAt' && '更新时间'}
+                          {settings.sortBy === 'createdAt' && '创建时间'}
+                          {settings.sortBy === 'title' && '标题'}
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                        
+                        {showSettingsDropdown && (
+                          <div
+                            className={cn(
+                              'absolute left-0 top-full mt-1 z-20 w-32 border rounded-lg py-1 shadow-lg',
+                              theme.id === 'night'
+                                ? 'border-[#3a475b] bg-[#1a212c]'
+                                : 'border-[#d8d1c6] bg-white',
+                            )}
+                          >
+                            {(['updatedAt', 'createdAt', 'title'] as NoteSortOption[]).map((option) => (
+                              <button
+                                key={option}
+                                type="button"
+                                onClick={() => {
+                                  updateSettings({ sortBy: option });
+                                  setShowSettingsDropdown(false);
+                                }}
+                                className={cn(
+                                  'w-full px-3 py-1.5 text-left text-[11px] transition-colors',
+                                  theme.id === 'night'
+                                    ? settings.sortBy === option
+                                      ? 'bg-[#263245] text-[#dce6f6]'
+                                      : 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                                    : settings.sortBy === option
+                                      ? 'bg-[#f5f2ed] text-[#3c342b]'
+                                      : 'text-[#6b645a] hover:bg-[#f5f2ed]',
+                                )}
+                              >
+                                {option === 'updatedAt' && '按更新时间'}
+                                {option === 'createdAt' && '按创建时间'}
+                                {option === 'title' && '按标题'}
+                              </button>
+                            ))}
+                            <div
+                              className={cn(
+                                'my-1 border-t',
+                                theme.id === 'night' ? 'border-[#3a475b]' : 'border-[#e8e4dd]',
+                              )}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                updateSettings({ sortOrder: settings.sortOrder === 'asc' ? 'desc' : 'asc' });
+                                setShowSettingsDropdown(false);
+                              }}
+                              className={cn(
+                                'w-full px-3 py-1.5 text-left text-[11px] transition-colors',
+                                theme.id === 'night'
+                                  ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                                  : 'text-[#6b645a] hover:bg-[#f5f2ed]',
+                              )}
+                            >
+                              {settings.sortOrder === 'asc' ? '升序 ↑' : '降序 ↓'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {/* View Mode Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => updateSettings({ viewMode: settings.viewMode === 'list' ? 'grouped' : 'list' })}
+                        className={cn(
+                          'inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+                          theme.id === 'night'
+                            ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                            : 'text-[#6b645a] hover:bg-[#e8e4dd]',
+                        )}
+                        title={settings.viewMode === 'list' ? '分组视图' : '列表视图'}
+                      >
+                        {settings.viewMode === 'list' ? <LayoutGrid className="h-3 w-3" /> : <List className="h-3 w-3" />}
+                      </button>
+                    </div>
+                    
+                    {/* Stats */}
+                    <span
+                      className={cn(
+                        'text-[10px] opacity-60',
+                        theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#8a8075]',
+                      )}
+                    >
+                      {noteStats.totalNotes}篇 · {Math.round(noteStats.totalWords / 1000)}K字
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Notes List */}
             <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
-              {filteredNotes.length > 0 ? (
-                filteredNotes.map((note) => {
-                  const active = note.id === selectedId;
-                  const preview = getNotePreview(note.content);
-                  const timeText = formatRelativeTime(note.updatedAt);
-                  const subjectColor = getSubjectColor(note.subject);
-
-                  return (
-                    <button
-                      key={note.id}
-                      type="button"
-                      onClick={() => switchNote(note)}
-                      className={cn(
-                        'group w-full text-left rounded-xl border p-3 transition-all duration-200',
-                        active
-                          ? theme.id === 'night'
-                            ? 'bg-[#263245] border-[#3a506e] shadow-sm'
-                            : 'bg-white border-[#c8bdb0] shadow-sm'
-                          : theme.id === 'night'
-                            ? 'border-transparent hover:bg-[#232d3c] hover:border-[#334156]'
-                            : 'border-transparent hover:bg-[#f5f2ed] hover:border-[#ddd6cb]',
-                      )}
-                    >
-                      {/* Title Row */}
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <h3
-                          className={cn(
-                            'text-[13px] font-semibold leading-tight truncate flex-1',
-                            active
-                              ? theme.id === 'night'
-                                ? 'text-[#edf3ff]'
-                                : 'text-[#1f1c18]'
-                              : theme.id === 'night'
-                                ? 'text-[#c8d4e6]'
-                                : 'text-[#3c342b]',
-                          )}
-                        >
-                          {note.title || '未命名文稿'}
-                        </h3>
-                        <span
-                          className={cn(
-                            'shrink-0 inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium',
-                            subjectColor,
-                          )}
-                        >
-                          {note.subject}
-                        </span>
-                      </div>
-
-                      {/* Preview */}
-                      <p
+              {showTrash ? (
+                // Trash View
+                trashNotes.length > 0 ? (
+                  <>
+                    <div className="mb-3 flex items-center justify-between px-1">
+                      <span
                         className={cn(
-                          'text-[11px] leading-relaxed truncate mb-2',
-                          theme.id === 'night' ? 'text-[#8ea2c2]' : 'text-[#8a8075]',
+                          'text-[10px] opacity-60',
+                          theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#8a8075]',
                         )}
                       >
-                        {preview}
-                      </p>
+                        {trashNotes.length} 篇已删除笔记
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleClearTrash}
+                        className={cn(
+                          'text-[10px] transition-colors',
+                          theme.id === 'night'
+                            ? 'text-red-400 hover:text-red-300'
+                            : 'text-red-600 hover:text-red-700',
+                        )}
+                      >
+                        清空回收站
+                      </button>
+                    </div>
+                    {trashNotes.map((note) => {
+                      const active = note.id === selectedId;
+                      const preview = getNotePreview(note.content);
+                      const deletedTime = formatRelativeTime(note.deletedAt);
 
-                      {/* Meta Row */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="h-3 w-3 opacity-50" />
-                          <span
-                            className={cn(
-                              'text-[10px]',
-                              theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#a0988c]',
-                            )}
-                          >
-                            {timeText}
-                          </span>
-                        </div>
-                        {note.tags.length > 0 && (
-                          <div className="flex items-center gap-1">
-                            <Tag className="h-3 w-3 opacity-40" />
+                      return (
+                        <div
+                          key={note.id}
+                          className={cn(
+                            'group w-full rounded-xl border p-3 transition-all duration-200',
+                            active
+                              ? theme.id === 'night'
+                                ? 'bg-[#263245] border-[#3a506e]'
+                                : 'bg-white border-[#c8bdb0]'
+                              : theme.id === 'night'
+                                ? 'border-transparent hover:bg-[#232d3c]'
+                                : 'border-transparent hover:bg-[#f5f2ed]',
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <h3
+                              className={cn(
+                                'text-[13px] font-semibold leading-tight truncate flex-1',
+                                theme.id === 'night' ? 'text-[#c8d4e6]' : 'text-[#3c342b]',
+                              )}
+                            >
+                              {note.title || '未命名文稿'}
+                            </h3>
                             <span
                               className={cn(
-                                'text-[10px] truncate max-w-[80px]',
+                                'shrink-0 inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium',
+                                getSubjectColor(note.subject),
+                              )}
+                            >
+                              {note.subject}
+                            </span>
+                          </div>
+                          <p
+                            className={cn(
+                              'text-[11px] leading-relaxed truncate mb-2',
+                              theme.id === 'night' ? 'text-[#8ea2c2]' : 'text-[#8a8075]',
+                            )}
+                          >
+                            {preview}
+                          </p>
+                          <div className="flex items-center justify-between">
+                            <span
+                              className={cn(
+                                'text-[10px]',
                                 theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#a0988c]',
                               )}
                             >
-                              {note.tags.slice(0, 2).join(', ')}
-                              {note.tags.length > 2 && ` +${note.tags.length - 2}`}
+                              删除于 {deletedTime}
                             </span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleRestoreFromTrash(note.id)}
+                                className={cn(
+                                  'inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+                                  theme.id === 'night'
+                                    ? 'text-green-400 hover:bg-[#263245]'
+                                    : 'text-green-600 hover:bg-[#e8e4dd]',
+                                )}
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                恢复
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handlePermanentDelete(note.id)}
+                                className={cn(
+                                  'inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+                                  theme.id === 'night'
+                                    ? 'text-red-400 hover:bg-[#263245]'
+                                    : 'text-red-600 hover:bg-[#e8e4dd]',
+                                )}
+                              >
+                                <Trash className="h-3 w-3" />
+                                删除
+                              </button>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="flex flex-col items-center justify-center py-10 text-center">
-                  <div
-                    className={cn(
-                      'w-10 h-10 rounded-xl flex items-center justify-center mb-3',
-                      theme.id === 'night'
-                        ? 'bg-[#232d3c] text-[#5a6d85]'
-                        : 'bg-[#e8e4dd] text-[#a0988c]',
-                    )}
-                  >
-                    <FileX className="h-5 w-5" />
+                        </div>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <div
+                      className={cn(
+                        'w-10 h-10 rounded-xl flex items-center justify-center mb-3',
+                        theme.id === 'night'
+                          ? 'bg-[#232d3c] text-[#5a6d85]'
+                          : 'bg-[#e8e4dd] text-[#a0988c]',
+                      )}
+                    >
+                      <Archive className="h-5 w-5" />
+                    </div>
+                    <p
+                      className={cn(
+                        'text-[12px] font-medium mb-1',
+                        theme.id === 'night' ? 'text-[#8ea2c2]' : 'text-[#6b645a]',
+                      )}
+                    >
+                      回收站为空
+                    </p>
+                    <p
+                      className={cn(
+                        'text-[11px]',
+                        theme.id === 'night' ? 'text-[#5a6d85]' : 'text-[#a0988c]',
+                      )}
+                    >
+                      删除的笔记会在这里显示
+                    </p>
                   </div>
-                  <p
-                    className={cn(
-                      'text-[12px] font-medium mb-1',
-                      theme.id === 'night' ? 'text-[#8ea2c2]' : 'text-[#6b645a]',
+                )
+              ) : settings.viewMode === 'grouped' ? (
+                // Grouped View
+                Array.from(groupedNotes.entries()).map(([groupName, groupNotes]) => (
+                  <div key={groupName} className="mb-4">
+                    <div
+                      className={cn(
+                        'px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider mb-1',
+                        theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#8a8075]',
+                      )}
+                    >
+                      {groupName}
+                      <span className="ml-1 opacity-60">({groupNotes.length})</span>
+                    </div>
+                    <div className="space-y-1">
+                      {groupNotes.map((note) => (
+                        <NoteListItem
+                          key={note.id}
+                          note={note}
+                          isActive={note.id === selectedId}
+                          theme={theme}
+                          onClick={() => switchNote(note)}
+                          onPin={() => handlePinNote(note.id)}
+                          onFavorite={() => handleFavoriteNote(note.id)}
+                          isBatchMode={isBatchMode}
+                          isSelected={selectedNoteIds.has(note.id)}
+                          onSelect={() => toggleNoteSelection(note.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                // List View
+                filteredAndSortedNotes.length > 0 ? (
+                  filteredAndSortedNotes.map((note) => (
+                    <NoteListItem
+                      key={note.id}
+                      note={note}
+                      isActive={note.id === selectedId}
+                      theme={theme}
+                      onClick={() => switchNote(note)}
+                      onPin={() => handlePinNote(note.id)}
+                      onFavorite={() => handleFavoriteNote(note.id)}
+                      isBatchMode={isBatchMode}
+                      isSelected={selectedNoteIds.has(note.id)}
+                      onSelect={() => toggleNoteSelection(note.id)}
+                    />
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <div
+                      className={cn(
+                        'w-10 h-10 rounded-xl flex items-center justify-center mb-3',
+                        theme.id === 'night'
+                          ? 'bg-[#232d3c] text-[#5a6d85]'
+                          : 'bg-[#e8e4dd] text-[#a0988c]',
+                      )}
+                    >
+                      <FileX className="h-5 w-5" />
+                    </div>
+                    <p
+                      className={cn(
+                        'text-[12px] font-medium mb-1',
+                        theme.id === 'night' ? 'text-[#8ea2c2]' : 'text-[#6b645a]',
+                      )}
+                    >
+                      {search.trim() ? '未找到匹配的笔记' : '暂无笔记'}
+                    </p>
+                    <p
+                      className={cn(
+                        'text-[11px]',
+                        theme.id === 'night' ? 'text-[#5a6d85]' : 'text-[#a0988c]',
+                      )}
+                    >
+                      {search.trim() ? '尝试其他关键词' : '点击上方"新建"创建第一篇笔记'}
+                    </p>
+                  </div>
+                )
+              )}
+            </div>
+            
+            {/* Bottom Actions */}
+            <div className="border-t px-4 py-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowTrash(!showTrash);
+                    setSelectedId(null);
+                    setDraft(EMPTY_DRAFT);
+                    setIsBatchMode(false);
+                  }}
+                  className={cn(
+                    'flex-1 inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-[11px] font-medium transition-colors',
+                    showTrash
+                      ? theme.id === 'night'
+                        ? 'bg-[#263245] text-[#dce6f6]'
+                        : 'bg-[#e8e4dd] text-[#3c342b]'
+                      : theme.id === 'night'
+                        ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                        : 'text-[#6b645a] hover:bg-[#f5f2ed]',
+                  )}
+                >
+                  {showTrash ? <FolderTree className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+                  {showTrash ? '返回笔记列表' : `回收站 (${trashNotes.length})`}
+                </button>
+                
+                {/* Import/Export */}
+                {!showTrash && (
+                  <div className="relative" ref={importExportRef}>
+                    <button
+                      type="button"
+                      onClick={() => setImportExportMenuOpen(!importExportMenuOpen)}
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-medium transition-colors',
+                        theme.id === 'night'
+                          ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                          : 'text-[#6b645a] hover:bg-[#f5f2ed]',
+                      )}
+                      title="导入/导出"
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                    
+                    {importExportMenuOpen && (
+                      <div
+                        className={cn(
+                          'absolute bottom-full right-0 mb-1 w-40 border rounded-lg py-1 shadow-lg z-20',
+                          theme.id === 'night'
+                            ? 'border-[#3a475b] bg-[#1a212c]'
+                            : 'border-[#d8d1c6] bg-white',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={handleExportJSON}
+                          className={cn(
+                            'w-full px-3 py-2 text-left text-[11px] transition-colors inline-flex items-center gap-2',
+                            theme.id === 'night'
+                              ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                              : 'text-[#6b645a] hover:bg-[#f5f2ed]',
+                          )}
+                        >
+                          <FileDown className="h-3.5 w-3.5" />
+                          导出 JSON
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => fileImportRef.current?.click()}
+                          className={cn(
+                            'w-full px-3 py-2 text-left text-[11px] transition-colors inline-flex items-center gap-2',
+                            theme.id === 'night'
+                              ? 'text-[#8ea2c2] hover:bg-[#232d3c]'
+                              : 'text-[#6b645a] hover:bg-[#f5f2ed]',
+                          )}
+                        >
+                          <FileUp className="h-3.5 w-3.5" />
+                          导入 JSON
+                        </button>
+                      </div>
                     )}
-                  >
-                    {search.trim() ? '未找到匹配的笔记' : '暂无笔记'}
-                  </p>
-                  <p
-                    className={cn(
-                      'text-[11px]',
-                      theme.id === 'night' ? 'text-[#5a6d85]' : 'text-[#a0988c]',
-                    )}
-                  >
-                    {search.trim() ? '尝试其他关键词' : '点击上方"新建"创建第一篇笔记'}
-                  </p>
+                  </div>
+                )}
+              </div>
+              
+              {!showTrash && (
+                <div
+                  className={cn(
+                    'flex items-center justify-between text-[10px] px-1',
+                    theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#8a8075]',
+                  )}
+                >
+                  <span>↑↓ 键盘导航</span>
+                  <span>Ctrl+N 新建</span>
+                  <span>Ctrl+S 保存</span>
                 </div>
               )}
             </div>
@@ -1115,8 +1866,31 @@ export default function DashboardNotebookPage() {
               {blocks.map((block, index) => {
                 const isEditing = index === editingIndex;
                 const current = isEditing ? blockDraft : block;
+                const isDragging = draggedBlockIndex === index;
                 return (
-                  <section key={`${index}-${block.slice(0, 18)}`} className="group mb-2">
+                  <section 
+                    key={`${index}-${block.slice(0, 18)}`} 
+                    className={cn(
+                      'group mb-2 relative',
+                      isDragging && 'opacity-50'
+                    )}
+                    draggable={!isEditing}
+                    onDragStart={() => handleBlockDragStart(index)}
+                    onDragOver={(e) => handleBlockDragOver(e, index)}
+                    onDrop={(e) => handleBlockDrop(e, index)}
+                  >
+                    {/* Drag Handle */}
+                    {!isEditing && (
+                      <div
+                        className={cn(
+                          'absolute left-[-20px] top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity',
+                          theme.id === 'night' ? 'text-[#5a6d85]' : 'text-[#a0988c]',
+                        )}
+                        title="拖拽调整顺序"
+                      >
+                        <GripVertical className="h-4 w-4" />
+                      </div>
+                    )}
                     {isEditing ? (
                       <div className="relative">
                         <textarea
@@ -1272,9 +2046,20 @@ export default function DashboardNotebookPage() {
               </button>
             </article>
 
-            <p className={cn('mt-8 text-xs opacity-60', fileToneClass)}>
-              {statusText}
-            </p>
+            <div className={cn('mt-8 flex items-center justify-between text-xs', fileToneClass)}>
+              <span>{statusText}</span>
+              <div className="flex items-center gap-3">
+                {selectedNote && (
+                  <>
+                    <span>创建于 {new Date(selectedNote.createdAt).toLocaleDateString('zh-CN')}</span>
+                    <span>·</span>
+                    <span>{blocks.length} 段落</span>
+                  </>
+                )}
+                <span>·</span>
+                <span>{charCount} 字符</span>
+              </div>
+            </div>
           </div>
         </main>
 
@@ -1337,6 +2122,276 @@ export default function DashboardNotebookPage() {
             </div>
           </aside>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Note List Item Component
+interface NoteListItemProps {
+  note: NotebookNote;
+  isActive: boolean;
+  theme: ThemeOption;
+  onClick: () => void;
+  onPin: (e?: React.MouseEvent) => void;
+  onFavorite: (e?: React.MouseEvent) => void;
+  isBatchMode?: boolean;
+  isSelected?: boolean;
+  onSelect?: () => void;
+}
+
+function NoteListItem({ 
+  note, 
+  isActive, 
+  theme, 
+  onClick, 
+  onPin, 
+  onFavorite,
+  isBatchMode = false,
+  isSelected = false,
+  onSelect,
+}: NoteListItemProps) {
+  const preview = getNotePreview(note.content);
+  const timeText = formatRelativeTime(note.updatedAt);
+  const subjectColor = getSubjectColor(note.subject);
+
+  return (
+    <div
+      className={cn(
+        'group w-full rounded-xl border p-3 transition-all duration-200 relative',
+        isActive
+          ? theme.id === 'night'
+            ? 'bg-[#263245] border-[#3a506e] shadow-sm'
+            : 'bg-white border-[#c8bdb0] shadow-sm'
+          : isSelected
+            ? theme.id === 'night'
+              ? 'bg-[#263245]/50 border-[#3a506e]/50'
+              : 'bg-[#f5f2ed] border-[#c8bdb0]/50'
+            : theme.id === 'night'
+              ? 'border-transparent hover:bg-[#232d3c] hover:border-[#334156]'
+              : 'border-transparent hover:bg-[#f5f2ed] hover:border-[#ddd6cb]',
+      )}
+    >
+      {/* Batch Selection Checkbox */}
+      {isBatchMode && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect?.();
+          }}
+          className="absolute left-2 top-1/2 -translate-y-1/2 z-10"
+        >
+          {isSelected ? (
+            <CheckSquare className={cn(
+              'h-4 w-4',
+              theme.id === 'night' ? 'text-[#5a7aaa]' : 'text-[#655e54]',
+            )} />
+          ) : (
+            <Square className={cn(
+              'h-4 w-4',
+              theme.id === 'night' ? 'text-[#5a6d85]' : 'text-[#a0988c]',
+            )} />
+          )}
+        </button>
+      )}
+      
+      <button
+        type="button"
+        onClick={isBatchMode ? onSelect : onClick}
+        className={cn('w-full text-left', isBatchMode && 'pl-6')}
+      >
+      {/* Pin Indicator */}
+      {note.isPinned && (
+        <div className="absolute -top-1 -right-1">
+          <Pin className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
+        </div>
+      )}
+      
+      {/* Title Row */}
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <h3
+          className={cn(
+            'text-[13px] font-semibold leading-tight truncate flex-1',
+            isActive
+              ? theme.id === 'night'
+                ? 'text-[#edf3ff]'
+                : 'text-[#1f1c18]'
+              : theme.id === 'night'
+                ? 'text-[#c8d4e6]'
+                : 'text-[#3c342b]',
+          )}
+        >
+          {note.title || '未命名文稿'}
+        </h3>
+        <div className="flex items-center gap-1">
+          {note.isFavorite && (
+            <Star className="h-3 w-3 text-amber-500 fill-amber-500" />
+          )}
+          <span
+            className={cn(
+              'shrink-0 inline-flex items-center px-1.5 py-px rounded text-[10px] font-medium',
+              subjectColor,
+            )}
+          >
+            {note.subject}
+          </span>
+        </div>
+      </div>
+
+      {/* Preview */}
+      <p
+        className={cn(
+          'text-[11px] leading-relaxed truncate mb-2',
+          theme.id === 'night' ? 'text-[#8ea2c2]' : 'text-[#8a8075]',
+        )}
+      >
+        {preview}
+      </p>
+
+      {/* Meta Row */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Clock className="h-3 w-3 opacity-50" />
+          <span
+            className={cn(
+              'text-[10px]',
+              theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#a0988c]',
+            )}
+          >
+            {timeText}
+          </span>
+        </div>
+        
+        {/* Action Buttons - Visible on Hover */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={onPin}
+            className={cn(
+              'p-1 rounded transition-colors',
+              theme.id === 'night'
+                ? 'hover:bg-[#3a475b] text-[#8ea2c2]'
+                : 'hover:bg-[#e8e4dd] text-[#6b645a]',
+            )}
+            title={note.isPinned ? '取消置顶' : '置顶'}
+          >
+            <Pin className={cn('h-3 w-3', note.isPinned && 'text-amber-500 fill-amber-500')} />
+          </button>
+          <button
+            type="button"
+            onClick={onFavorite}
+            className={cn(
+              'p-1 rounded transition-colors',
+              theme.id === 'night'
+                ? 'hover:bg-[#3a475b] text-[#8ea2c2]'
+                : 'hover:bg-[#e8e4dd] text-[#6b645a]',
+            )}
+            title={note.isFavorite ? '取消收藏' : '收藏'}
+          >
+            <Star className={cn('h-3 w-3', note.isFavorite && 'text-amber-500 fill-amber-500')} />
+          </button>
+        </div>
+        
+        {note.tags.length > 0 && (
+          <div className="flex items-center gap-1 ml-2">
+            <Tag className="h-3 w-3 opacity-40" />
+            <span
+              className={cn(
+                'text-[10px] truncate max-w-[60px]',
+                theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#a0988c]',
+              )}
+            >
+              {note.tags.slice(0, 2).join(', ')}
+              {note.tags.length > 2 && ` +${note.tags.length - 2}`}
+            </span>
+          </div>
+        )}
+      </div>
+      </button>
+    </div>
+  );
+}
+
+// Template Selector Modal
+interface TemplateSelectorProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSelect: (templateId: string) => void;
+  theme: ThemeOption;
+}
+
+function TemplateSelector({ isOpen, onClose, onSelect, theme }: TemplateSelectorProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div
+        className={cn(
+          'w-full max-w-md rounded-2xl border p-6 shadow-xl',
+          theme.id === 'night'
+            ? 'bg-[#1a212c] border-[#3a475b]'
+            : 'bg-white border-[#d8d1c6]',
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3
+            className={cn(
+              'text-lg font-semibold',
+              theme.id === 'night' ? 'text-[#dce6f6]' : 'text-[#3c342b]',
+            )}
+          >
+            选择笔记模板
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className={cn(
+              'p-1 rounded transition-colors',
+              theme.id === 'night'
+                ? 'text-[#8ea2c2] hover:bg-[#3a475b]'
+                : 'text-[#6b645a] hover:bg-[#e8e4dd]',
+            )}
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          {NOTE_TEMPLATES.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              onClick={() => onSelect(template.id)}
+              className={cn(
+                'flex flex-col items-center gap-2 p-4 rounded-xl border transition-all',
+                theme.id === 'night'
+                  ? 'border-[#3a475b] hover:border-[#5a7aaa] hover:bg-[#232d3c]'
+                  : 'border-[#e8e4dd] hover:border-[#a89b8a] hover:bg-[#f5f2ed]',
+              )}
+            >
+              <span className="text-3xl">{template.icon}</span>
+              <span
+                className={cn(
+                  'text-sm font-medium',
+                  theme.id === 'night' ? 'text-[#dce6f6]' : 'text-[#3c342b]',
+                )}
+              >
+                {template.name}
+              </span>
+            </button>
+          ))}
+        </div>
+        
+        <p
+          className={cn(
+            'mt-4 text-xs text-center',
+            theme.id === 'night' ? 'text-[#6b7d9a]' : 'text-[#8a8075]',
+          )}
+        >
+          选择合适的模板开始记录你的想法
+        </p>
       </div>
     </div>
   );

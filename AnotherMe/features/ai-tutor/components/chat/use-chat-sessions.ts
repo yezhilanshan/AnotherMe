@@ -17,6 +17,8 @@ import { useStageStore } from '@/lib/store';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore } from '@/lib/store/user-profile';
+import { buildDiagnosticSnapshot } from '@/lib/store/diagnostic';
+import type { DiagnosticSessionSnapshot } from '@/lib/types/learning-context';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
@@ -644,6 +646,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         };
         /** v3.3+: AI导师功能类型（chat | deep_solve | quiz | research | math_animator | visualize） */
         capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize';
+        /** Latest diagnostic session data from the frontend */
+        diagnosticSession?: DiagnosticSessionSnapshot | null;
       },
       controller: AbortController,
       sessionType: SessionType,
@@ -1172,6 +1176,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               sessionType: session.type,
               title: session.title,
             }),
+            diagnosticSession: buildDiagnosticSnapshot(),
           },
           controller,
           session.type,
@@ -1427,6 +1432,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               title: persistenceTitle,
               latestUserMessageId: userMessageId,
             }),
+            diagnosticSession: buildDiagnosticSnapshot(),
             capability, // v3.3+: 传递选中的 capability
           },
           controller,

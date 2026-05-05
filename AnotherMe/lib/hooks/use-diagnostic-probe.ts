@@ -1,9 +1,12 @@
 /**
- * useDiagnosticProbe - React hook for generating and displaying diagnostic probes.
+ * useDiagnosticProbe - React hook for generating diagnostic probes.
+ *
+ * Uses the diagnostic Zustand store for shared probe state,
+ * so the same probe is visible across chat sidebar and standalone page.
  */
 
-import { useState, useCallback } from 'react';
-import type { DiagnosticProbe } from '@/lib/types/diagnostic-probe';
+import { useCallback } from 'react';
+import { useDiagnosticStore, type DiagnosticState } from '@/lib/store/diagnostic';
 import { fetchDiagnosticProbe } from '@/lib/diagnostic-probe/client';
 
 export interface UseDiagnosticProbeOptions {
@@ -11,7 +14,7 @@ export interface UseDiagnosticProbeOptions {
 }
 
 export interface UseDiagnosticProbeReturn {
-  probe: DiagnosticProbe | null;
+  probe: DiagnosticState['currentProbe'];
   loading: boolean;
   error: string | null;
   generateProbe: (params?: { knowledgePointId?: string; difficulty?: string; probeType?: string }) => Promise<void>;
@@ -19,14 +22,18 @@ export interface UseDiagnosticProbeReturn {
 }
 
 export function useDiagnosticProbe(options: UseDiagnosticProbeOptions): UseDiagnosticProbeReturn {
-  const [probe, setProbe] = useState<DiagnosticProbe | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const probe = useDiagnosticStore((s) => s.currentProbe);
+  const loading = useDiagnosticStore((s) => s.probeLoading);
+  const error = useDiagnosticStore((s) => s.probeError);
+  const setProbe = useDiagnosticStore((s) => s.setProbe);
+  const setProbeLoading = useDiagnosticStore((s) => s.setProbeLoading);
+  const setProbeError = useDiagnosticStore((s) => s.setProbeError);
+  const storeClearProbe = useDiagnosticStore((s) => s.clearProbe);
 
   const generateProbe = useCallback(
     async (params?: { knowledgePointId?: string; difficulty?: string; probeType?: string }) => {
-      setLoading(true);
-      setError(null);
+      setProbeLoading(true);
+      setProbeError(null);
       try {
         const result = await fetchDiagnosticProbe({
           userId: options.userId,
@@ -35,21 +42,16 @@ export function useDiagnosticProbe(options: UseDiagnosticProbeOptions): UseDiagn
         if (result) {
           setProbe(result);
         } else {
-          setError('未能生成诊断题，请稍后重试');
+          setProbeError('未能生成诊断题，请稍后重试');
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : '生成诊断题失败');
+        setProbeError(err instanceof Error ? err.message : '生成诊断题失败');
       } finally {
-        setLoading(false);
+        setProbeLoading(false);
       }
     },
-    [options.userId],
+    [options.userId, setProbe, setProbeLoading, setProbeError],
   );
 
-  const clearProbe = useCallback(() => {
-    setProbe(null);
-    setError(null);
-  }, []);
-
-  return { probe, loading, error, generateProbe, clearProbe };
+  return { probe, loading, error, generateProbe, clearProbe: storeClearProbe };
 }

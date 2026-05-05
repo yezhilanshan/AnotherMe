@@ -305,6 +305,8 @@ export interface StatelessChatRequest {
   };
   /** Unified learning context for profile-aware tutoring and traceability. */
   learningContext?: LearningContext;
+  /** Latest diagnostic session data from the frontend (merged into learning context server-side) */
+  diagnosticSession?: import('@/lib/types/learning-context').DiagnosticSessionSnapshot | null;
   /** OpenAI-compatible API credentials */
   apiKey: string;
   baseUrl?: string;

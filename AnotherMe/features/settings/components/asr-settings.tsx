@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useRef } from 'react';
 import { Label } from '@/components/ui/label';
@@ -174,7 +174,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
         <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                 {t('settings.asrApiKey')}
               </Label>
               <div className="relative">
@@ -206,7 +206,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
               </div>
             </div>
             <div className="space-y-2.5">
-              <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
                 {t('settings.asrBaseUrl')}
               </Label>
               <Input
@@ -257,7 +257,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       {/* Test ASR */}
       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
         <div className="space-y-3">
-          <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
             {t('settings.testASR')}
           </Label>
           <div className="flex gap-3">
@@ -324,7 +324,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       {asrProvider.models.length > 0 && (
         <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
           <div className="space-y-3">
-            <Label className="text-[0.8rem] font-semibold text-[rgba(93,80,68,0.92)] tracking-wide">
+            <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
               {t('settings.ttsModel')}
             </Label>
             <Select

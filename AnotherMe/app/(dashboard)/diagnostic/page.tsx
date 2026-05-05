@@ -7,12 +7,23 @@
 
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useAuth } from '@/features/auth/components/auth-provider';
-import { DiagnosticProbePanel } from '@/features/diagnostic/components/diagnostic-probe/diagnostic-probe-panel';
 import { useDiagnosticProbe } from '@/lib/hooks/use-diagnostic-probe';
+import { useDiagnosticStore } from '@/lib/store/diagnostic';
+import { recordDiagnosticEvent } from '@/lib/diagnostic-probe/record-diagnostic-event';
+import { KnowledgeStateDashboard } from '@/features/diagnostic/components/knowledge-state-dashboard';
 import type { DiagnosticProbe } from '@/lib/types/diagnostic-probe';
-import { Stethoscope, RefreshCw, BookOpen, AlertCircle } from 'lucide-react';
+import {
+  Stethoscope,
+  RefreshCw,
+  BookOpen,
+  AlertCircle,
+  AlertTriangle,
+  Clock,
+  CheckCircle2,
+  XCircle,
+} from 'lucide-react';
 
 function ProbeAnswerForm({
   probe,
@@ -25,9 +36,18 @@ function ProbeAnswerForm({
 }) {
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [fillAnswer, setFillAnswer] = useState('');
+  const [stepChecks, setStepChecks] = useState<boolean[]>([]);
   const [submitted, setSubmitted] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Initialize step checks when probe changes
+  React.useEffect(() => {
+    if (probe.probeType === 'step_by_step' && probe.options) {
+      setStepChecks(new Array(probe.options.length).fill(false));
+    }
+  }, [probe]);
 
   const handleSubmit = async () => {
     if (submitting) return;
@@ -38,16 +58,19 @@ function ProbeAnswerForm({
       correct = probe.options[selectedOption] === probe.correctAnswer;
     } else if (probe.probeType === 'fill_blank') {
       correct = fillAnswer.trim().toLowerCase() === probe.correctAnswer.trim().toLowerCase();
+    } else if (probe.probeType === 'step_by_step' && probe.options) {
+      // Score based on fraction of steps completed
+      const checkedCount = stepChecks.filter(Boolean).length;
+      correct = checkedCount === probe.options.length;
     } else {
-      correct = true; // step_by_step defaults to correct, user self-checks
+      correct = true;
     }
 
     setIsCorrect(correct);
     setSubmitted(true);
 
-    // Report answer to backend for BKT update
     try {
-      await fetch(`/api/students/${encodeURIComponent(userId)}/quiz-answers`, {
+      const res = await fetch(`/api/students/${encodeURIComponent(userId)}/quiz-answers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -56,8 +79,11 @@ function ProbeAnswerForm({
           knowledge_point_id: probe.knowledgePointId,
         }),
       });
+      if (!res.ok) {
+        setSubmitError('知识追踪更新失败，答题记录已本地保存');
+      }
     } catch {
-      // Non-blocking: BKT update failure should not break UX
+      setSubmitError('知识追踪更新失败，答题记录已本地保存');
     }
 
     onAnswered({ correct, probe });
@@ -65,6 +91,9 @@ function ProbeAnswerForm({
   };
 
   if (submitted) {
+    const stepTotal = probe.probeType === 'step_by_step' && probe.options ? probe.options.length : 0;
+    const stepDone = stepTotal > 0 ? stepChecks.filter(Boolean).length : 0;
+
     return (
       <div className="mt-4 space-y-3">
         <div
@@ -74,12 +103,39 @@ function ProbeAnswerForm({
               : 'bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200'
           }`}
         >
-          {isCorrect ? '回答正确！' : '回答错误，请查看解析。'}
+          {isCorrect
+            ? '回答正确！'
+            : stepTotal > 0
+              ? `完成了 ${stepDone}/${stepTotal} 个步骤，请查看解析。`
+              : '回答错误，请查看解析。'}
         </div>
+        {stepTotal > 0 && probe.options && (
+          <div className="space-y-1">
+            {probe.options.map((step, idx) => (
+              <div
+                key={idx}
+                className={`flex items-start gap-2 rounded-md px-3 py-1.5 text-xs ${
+                  stepChecks[idx]
+                    ? 'bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-200'
+                    : 'bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200'
+                }`}
+              >
+                <span className="font-medium">{stepChecks[idx] ? '✓' : '✗'}</span>
+                <span>{step}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="rounded-lg bg-muted/50 p-3 text-sm">
           <p className="font-medium text-foreground">解析:</p>
           <p className="mt-1 text-muted-foreground">{probe.explanation}</p>
         </div>
+        {submitError && (
+          <div className="flex items-center gap-2 rounded-md bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            {submitError}
+          </div>
+        )}
       </div>
     );
   }
@@ -115,7 +171,37 @@ function ProbeAnswerForm({
         />
       )}
 
-      {probe.probeType === 'step_by_step' && (
+      {probe.probeType === 'step_by_step' && probe.options && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted-foreground mb-2">
+            请逐步完成以下步骤，完成后勾选对应的复选框：
+          </p>
+          {probe.options.map((step, idx) => (
+            <label
+              key={idx}
+              className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm transition-colors cursor-pointer ${
+                stepChecks[idx]
+                  ? 'border-primary/30 bg-primary/5'
+                  : 'border-border bg-background hover:bg-accent/50'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={stepChecks[idx] || false}
+                onChange={(e) => {
+                  const newChecks = [...stepChecks];
+                  newChecks[idx] = e.target.checked;
+                  setStepChecks(newChecks);
+                }}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300"
+              />
+              <span>{step}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {probe.probeType === 'step_by_step' && !probe.options && (
         <p className="text-xs text-muted-foreground">
           分步题请自行在纸上推导，提交后查看参考答案与解析。
         </p>
@@ -124,7 +210,13 @@ function ProbeAnswerForm({
       <button
         type="button"
         onClick={handleSubmit}
-        disabled={submitting || (probe.probeType === 'choice' && selectedOption === null)}
+        disabled={
+          submitting ||
+          (probe.probeType === 'choice' && selectedOption === null) ||
+          (probe.probeType === 'step_by_step' &&
+            !!probe.options &&
+            stepChecks.every((c) => !c))
+        }
         className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
       >
         {submitting ? '提交中...' : '提交答案'}
@@ -138,7 +230,39 @@ export default function DiagnosticPage() {
   const { probe, loading: probeLoading, error, generateProbe, clearProbe } = useDiagnosticProbe({
     userId: user?.id || '',
   });
-  const [history, setHistory] = useState<Array<{ correct: boolean; probe: DiagnosticProbe }>>([]);
+
+  const { currentSession, startSession, addEntry, endSession, clearHistory, sessions } =
+    useDiagnosticStore();
+
+  const history = currentSession?.entries ?? [];
+
+  const handleStartSession = useCallback(() => {
+    if (!currentSession) {
+      startSession();
+    }
+    generateProbe();
+  }, [currentSession, startSession, generateProbe]);
+
+  const handleAnswered = useCallback(
+    (result: { correct: boolean; probe: DiagnosticProbe }) => {
+      if (!user) return;
+      if (!currentSession) {
+        startSession();
+      }
+      addEntry(result);
+
+      recordDiagnosticEvent({
+        userId: user.id,
+        probe: result.probe,
+        correct: result.correct,
+      });
+    },
+    [currentSession, startSession, addEntry, user],
+  );
+
+  const handleRegenerate = useCallback(() => {
+    clearProbe();
+  }, [clearProbe]);
 
   if (loading) {
     return (
@@ -179,7 +303,7 @@ export default function DiagnosticPage() {
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-lg border border-border bg-card p-3 text-center">
             <p className="text-2xl font-bold text-foreground">{history.length}</p>
-            <p className="text-xs text-muted-foreground">已做题数</p>
+            <p className="text-xs text-muted-foreground">本次已做题数</p>
           </div>
           <div className="rounded-lg border border-border bg-card p-3 text-center">
             <p className="text-2xl font-bold text-green-600">
@@ -196,6 +320,91 @@ export default function DiagnosticPage() {
         </div>
       )}
 
+      {/* Answer history timeline */}
+      {sessions.length > 0 && (
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">答题历史</h3>
+            <button
+              type="button"
+              onClick={clearHistory}
+              className="text-xs text-muted-foreground hover:text-destructive"
+            >
+              清空记录
+            </button>
+          </div>
+          <div className="space-y-3">
+            {sessions.slice(0, 3).map((session) => {
+              const date = new Date(session.startedAt);
+              return (
+                <div key={session.sessionId}>
+                  <div className="mb-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <Clock className="h-3 w-3" />
+                    <span>
+                      {date.toLocaleDateString('zh-CN')}{' '}
+                      {date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <span className="text-green-600">
+                      {session.entries.filter((e) => e.correct).length} 正确
+                    </span>
+                    <span className="text-red-600">
+                      {session.entries.filter((e) => !e.correct).length} 错误
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {session.entries.map((entry, idx) => {
+                      const time = new Date(entry.answeredAt);
+                      const questionExcerpt =
+                        entry.probe.question.length > 60
+                          ? entry.probe.question.slice(0, 60) + '...'
+                          : entry.probe.question;
+                      return (
+                        <div
+                          key={idx}
+                          className="flex items-start gap-2 rounded-md bg-muted/30 px-3 py-2 text-xs"
+                        >
+                          {entry.correct ? (
+                            <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600" />
+                          ) : (
+                            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate font-medium text-foreground">
+                                {questionExcerpt}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-2 text-muted-foreground">
+                              <span>知识点: {entry.probe.knowledgePointId}</span>
+                              <span>·</span>
+                              <span>
+                                {time.toLocaleTimeString('zh-CN', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            </div>
+                          </div>
+                          <span
+                            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                              entry.correct
+                                ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300'
+                                : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
+                            }`}
+                          >
+                            {entry.correct ? '正确' : '错误'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Probe generation card */}
       <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
@@ -203,7 +412,7 @@ export default function DiagnosticPage() {
           {probe && (
             <button
               type="button"
-              onClick={clearProbe}
+              onClick={handleRegenerate}
               className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-accent"
             >
               <RefreshCw className="h-3 w-3" />
@@ -219,7 +428,7 @@ export default function DiagnosticPage() {
             </p>
             <button
               type="button"
-              onClick={() => generateProbe()}
+              onClick={handleStartSession}
               className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
               <BookOpen className="h-4 w-4" />
@@ -270,7 +479,7 @@ export default function DiagnosticPage() {
 
             {probe.options && probe.options.length > 0 && (
               <div className="space-y-2">
-                {probe.options.map((opt, idx) => (
+                {probe.options.map((opt: string, idx: number) => (
                   <div
                     key={idx}
                     className="rounded-md border border-border bg-background px-3 py-2 text-sm text-card-foreground"
@@ -284,7 +493,7 @@ export default function DiagnosticPage() {
             <ProbeAnswerForm
               probe={probe}
               userId={user.id}
-              onAnswered={(result) => setHistory((prev) => [...prev, result])}
+              onAnswered={handleAnswered}
             />
           </div>
         )}
@@ -303,6 +512,12 @@ export default function DiagnosticPage() {
           </p>
         </div>
       )}
+
+      {/* Knowledge State Dashboard */}
+      <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold text-card-foreground">知识掌握状态</h2>
+        <KnowledgeStateDashboard userId={user.id} />
+      </div>
     </div>
   );
 }

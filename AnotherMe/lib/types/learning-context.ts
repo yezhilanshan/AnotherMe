@@ -26,6 +26,32 @@ export interface KnowledgeTracingSnapshot {
   weakestKnowledgePointContext: string | null;
 }
 
+export interface DiagnosticProbeSnapshot {
+  /** Knowledge point targeted by this probe */
+  knowledgePointId: string;
+  /** Question text */
+  question: string;
+  /** Whether the student answered correctly */
+  correct: boolean;
+  /** Teaching action associated with this probe */
+  teachingAction: string;
+}
+
+export interface DiagnosticSessionSnapshot {
+  /** Session identifier */
+  sessionId: string;
+  /** Timestamp of the session */
+  startedAt: number;
+  /** Probes answered in this session */
+  probes: DiagnosticProbeSnapshot[];
+  /** Session-level stats */
+  totalAnswered: number;
+  correctCount: number;
+  incorrectCount: number;
+  /** Per-knowledge-point mastery scores from block-level tracking */
+  blockMastery?: Record<string, number>;
+}
+
 export interface LearningContext {
   /** Unique user identifier */
   userId: string;
@@ -50,6 +76,9 @@ export interface LearningContext {
 
   /** Knowledge tracing state: BKT-derived mastery + teaching decisions */
   knowledgeTracing: KnowledgeTracingSnapshot | null;
+
+  /** Latest diagnostic session results (populated from frontend) */
+  diagnosticSession: DiagnosticSessionSnapshot | null;
   
   /** Enabled tools/capabilities for this learning session */
   enabledTools: EnabledTool[];
@@ -146,6 +175,7 @@ export function createLearningContext(
     studentProfile: null,
     enabledTools: [],
     knowledgeTracing: null,
+    diagnosticSession: null,
     metadata: {
       source: 'chat',
       topic: null,

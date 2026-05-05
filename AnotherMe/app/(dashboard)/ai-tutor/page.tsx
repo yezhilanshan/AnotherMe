@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Settings,
   Sparkles,
+  Stethoscope,
   ThumbsDown,
   ThumbsUp,
   Trash2,
@@ -40,6 +41,9 @@ import {
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { UNIFIED_MENTOR_PRESET } from '@/lib/orchestration/registry/classroom-presets';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/features/auth/components/auth-provider';
+import { DiagnosticProbePanel } from '@/features/diagnostic/components/diagnostic-probe/diagnostic-probe-panel';
+import { buildDiagnosticSnapshot } from '@/lib/store/diagnostic';
 import { NeuralLoader, BrainWaveLoader } from '@/features/ai-tutor/components/ai-elements/loader';
 import { MarkdownRenderer } from '@/features/ai-tutor/components/markdown/MarkdownRenderer';
 import { ToolTracePanel } from '@/features/ai-tutor/components/chat/tool-trace-panel';
@@ -760,6 +764,7 @@ function toToolExecutionTraces(traces?: TutorToolTrace[]): import('@/features/ai
 }
 
 export default function AITutorPage() {
+  const { user } = useAuth();
   const [sessions, setSessions] = useState<TutorSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState('');
   const [hydrated, setHydrated] = useState(false);
@@ -774,6 +779,7 @@ export default function AITutorPage() {
   const [showCapabilityMenu, setShowCapabilityMenu] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [showDiagnosticPanel, setShowDiagnosticPanel] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -1198,6 +1204,7 @@ export default function AITutorPage() {
               source: 'ai_tutor',
               latestUserMessageId: userMessage.id,
             },
+            diagnosticSession: buildDiagnosticSnapshot(),
             apiKey: modelConfig.apiKey || '',
             baseUrl: modelConfig.baseUrl || undefined,
             model: modelConfig.modelString || undefined,
@@ -1466,6 +1473,19 @@ export default function AITutorPage() {
               title="设置"
             >
               <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setShowDiagnosticPanel((v) => !v)}
+              disabled={isTyping}
+              className={cn(
+                'inline-flex items-center justify-center h-8 w-8 rounded-lg border transition-colors shadow-sm disabled:opacity-50',
+                showDiagnosticPanel
+                  ? 'bg-primary/10 border-primary/30 text-primary'
+                  : 'bg-white dark:bg-[#201c18] border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#2a241f]',
+              )}
+              title="诊断练习"
+            >
+              <Stethoscope className="h-4 w-4" />
             </button>
             <button
               onClick={handleNewSession}
@@ -1865,6 +1885,33 @@ export default function AITutorPage() {
           </div>
         </div>
       </section>
+
+      {/* Right sidebar - Diagnostic Panel */}
+      {showDiagnosticPanel && (
+        <aside className="w-80 shrink-0 border-l border-gray-200/60 dark:border-gray-800/60 bg-[#f5f4f2] dark:bg-[#1c1814] h-full overflow-y-auto p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-1.5">
+              <Stethoscope className="h-4 w-4 text-primary" />
+              诊断练习
+            </h2>
+            <button
+              onClick={() => setShowDiagnosticPanel(false)}
+              className="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              type="button"
+            >
+              关闭
+            </button>
+          </div>
+          <DiagnosticProbePanel
+            userId={user?.id || ''}
+            onAnswered={() => {
+              // Diagnostic answers are persisted via the store.
+              // The AI tutor picks them up on the next chat message
+              // via buildDiagnosticSnapshot → LearningContext.diagnosticSession.
+            }}
+          />
+        </aside>
+      )}
     </div>
   );
 }
